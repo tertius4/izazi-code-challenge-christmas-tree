@@ -1,0 +1,16 @@
+vertex,x,y,description
+1,0.0,0.8,Tip
+2,0.125,0.5,Right top tier outer
+3,0.0625,0.5,Right top tier inner
+4,0.2,0.25,Right middle tier outer
+5,0.1,0.25,Right middle tier inner
+6,0.35,0.0,Right bottom tier
+7,0.075,0.0,Right trunk top
+8,0.075,-0.2,Right trunk bottom
+9,-0.075,-0.2,Left trunk bottom
+10,-0.075,0.0,Left trunk top
+11,-0.35,0.0,Left bottom tier
+12,-0.1,0.25,Left middle tier inner
+13,-0.2,0.25,Left middle tier outer
+14,-0.0625,0.5,Left top tier inner
+15,-0.125,0.5,Left top tier outer

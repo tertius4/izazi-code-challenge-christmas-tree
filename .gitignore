@@ -1,0 +1,6 @@
+.vscode
+output
+build
+
+# For now:
+_packer.cpp
