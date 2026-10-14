@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <iostream>
+#include <iomanip>
 #include <limits>
+#include <optional>
 #include <random>
+#include <sstream>
 #include <utility>
 
 #include "packing/lattice.h"
@@ -12,6 +15,39 @@
 namespace packer::packing {
 namespace {
 constexpr double kInf = std::numeric_limits<double>::infinity();
+
+// A short label for the report, such as "lattice 12.3deg".
+std::string latticeName(const LatticeParams &p) {
+    std::ostringstream out;
+    out << "lattice " << std::fixed << std::setprecision(1) << geometry::normalizeDeg(p.deg)
+        << "deg";
+    return out.str();
+}
+
+// Searches for dense lattices from evenly spread starting angles and keeps the densest ones.
+std::vector<LatticeParams> findLattices(const Polygon &shape, const SolverConfig &cfg) {
+    std::vector<std::optional<LatticeParams>> found(cfg.latticeStarts);
+#pragma omp parallel for schedule(dynamic)
+    for (int k = 0; k < cfg.latticeStarts; ++k) {
+        std::mt19937_64 rng(cfg.seed * 1000003ULL + k);
+        const double startDeg = 180.0 * k / cfg.latticeStarts;
+        found[k] = findLattice(shape, startDeg, cfg.latticeTries, cfg.latticeTweaks, rng);
+    }
+
+    std::vector<LatticeParams> lattices;
+    for (const auto &p : found) {
+        if (p) lattices.push_back(*p);
+    }
+    std::sort(lattices.begin(), lattices.end(), [](const LatticeParams &a, const LatticeParams &b) {
+        return areaPerTree(a) < areaPerTree(b);
+    });
+    if (static_cast<int>(lattices.size()) > cfg.latticeKeep) lattices.resize(cfg.latticeKeep);
+
+    for (const LatticeParams &p : lattices) {
+        std::cout << latticeName(p) << ": area per tree " << areaPerTree(p) << "\n";
+    }
+    return lattices;
+}
 
 struct Start {
     Layout layout;
@@ -30,8 +66,7 @@ std::vector<Start> startsFor(int n, const Polygon &shape,
 
     std::vector<Start> grids;
     for (const LatticeParams &p : lattices) {
-        grids.push_back({buildLattice(shape, p, n),
-                         "lattice " + std::to_string(static_cast<int>(p.baseDeg)) + "deg"});
+        grids.push_back({cutLattice(shape, p, n), latticeName(p)});
     }
     std::sort(grids.begin(), grids.end(),
               [](const Start &a, const Start &b) { return a.layout.side() < b.layout.side(); });
@@ -41,7 +76,7 @@ std::vector<Start> startsFor(int n, const Polygon &shape,
             starts.push_back({randomStart(shape, n, rng), "random"});
         }
 
-        starts.push_back(std::move(grids.front()));
+        if (!grids.empty()) starts.push_back(std::move(grids.front()));
     } else if (n <= cfg.mediumMax) {
         for (Start &g : grids) {
             starts.push_back(std::move(g));
@@ -60,36 +95,15 @@ std::vector<Start> startsFor(int n, const Polygon &shape,
 
 // The best (n-1)-tree layout we can get by deleting one tree.
 Layout bestRemoval(const Layout &layout) {
-    std::size_t bestIndex = 0;
-    double bestSide = kInf;
-    for (std::size_t skip = 0; skip < layout.size(); ++skip) {
-        Box b{kInf, kInf, -kInf, -kInf};
-        for (std::size_t j = 0; j < layout.size(); ++j) {
-            if (j == skip) continue;
-            const Box &t = layout.boxes[j];
-            b.minX = std::min(b.minX, t.minX);
-            b.minY = std::min(b.minY, t.minY);
-            b.maxX = std::max(b.maxX, t.maxX);
-            b.maxY = std::max(b.maxY, t.maxY);
-        }
-        const double side = std::max(b.maxX - b.minX, b.maxY - b.minY);
-        if (side < bestSide) {
-            bestSide = side;
-            bestIndex = skip;
-        }
-    }
     Layout result = layout;
-    result.remove(bestIndex);
+    result.remove(layout.bestTreeToRemove());
     return result;
 }
 } // namespace
 
 Solution solveAll(const Polygon &shape, const SolverConfig &cfg) {
-    // Lattice search is the same for every n, so do it once per angle up front.
-    std::vector<LatticeParams> lattices;
-    for (double deg : cfg.latticeAngles) {
-        lattices.push_back(findLattice(shape, deg));
-    }
+    // Lattice search is the same for every n, so do it once up front.
+    const std::vector<LatticeParams> lattices = findLattices(shape, cfg);
 
     Solution sol;
     sol.layouts.assign(cfg.maxN + 1, Layout(shape));

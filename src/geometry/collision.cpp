@@ -52,6 +52,7 @@ bool pointInPolygon(const Point &p, const Polygon &poly) {
 
 bool polygonsCollide(const Polygon &a, const Box &boxA, const Polygon &b, const Box &boxB) {
     if (!boxesOverlap(boxA, boxB)) return false;
+    
     for (std::size_t i = 0; i < a.size(); ++i) {
         const Point &a1 = a[i];
         const Point &a2 = a[(i + 1) % a.size()];

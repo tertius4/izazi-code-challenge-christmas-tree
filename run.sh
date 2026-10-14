@@ -64,7 +64,7 @@ case "$cmd" in
     run)
         in="${1:-$INPUT}"
         shift || true
-        ./"$BUILD_DIR"/main "$in" "$@"
+        time ./"$BUILD_DIR"/main "$in" "$@"
         ;;
     test)
         build

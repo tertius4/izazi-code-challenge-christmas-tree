@@ -1,6 +1,7 @@
 #include "packing/layout.h"
 #include "geometry/collision.h"
 #include <algorithm>
+#include <limits>
 
 namespace packer::packing {
 void Layout::add(const Pose &pose) {
@@ -55,5 +56,41 @@ double Layout::side() const {
     
     const Box b = bounds();
     return std::max(b.maxX - b.minX, b.maxY - b.minY);
+}
+
+std::size_t Layout::bestTreeToRemove() const {
+    constexpr double kInf = std::numeric_limits<double>::infinity();
+    std::size_t bestIndex = 0;
+    double bestSide = kInf;
+    for (std::size_t skip = 0; skip < size(); ++skip) {
+        Box b{kInf, kInf, -kInf, -kInf};
+        for (std::size_t j = 0; j < size(); ++j) {
+            if (j == skip) continue;
+            b.minX = std::min(b.minX, boxes[j].minX);
+            b.minY = std::min(b.minY, boxes[j].minY);
+            b.maxX = std::max(b.maxX, boxes[j].maxX);
+            b.maxY = std::max(b.maxY, boxes[j].maxY);
+        }
+        const double side = std::max(b.maxX - b.minX, b.maxY - b.minY);
+        if (side < bestSide) {
+            bestSide = side;
+            bestIndex = skip;
+        }
+    }
+    return bestIndex;
+}
+
+std::vector<std::size_t> Layout::edgeTrees() const {
+    constexpr double kTol = 1e-9;
+    const Box b = bounds();
+    std::vector<std::size_t> edge;
+    for (std::size_t i = 0; i < size(); ++i) {
+        const Box &t = boxes[i];
+        if (t.minX <= b.minX + kTol || t.minY <= b.minY + kTol || t.maxX >= b.maxX - kTol ||
+            t.maxY >= b.maxY - kTol) {
+            edge.push_back(i);
+        }
+    }
+    return edge;
 }
 } // namespace packer::packing

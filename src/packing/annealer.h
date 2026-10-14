@@ -12,6 +12,10 @@ struct AnnealConfig {
     double startStep = 0.1;  // largest shift per move at the start (rotation: 100x, in degrees)
     double endStep = 0.001;
     double pullWeight = 0.1; // strength of the pull toward the centre
+    // Compaction moves, as shares of all moves. The rest are plain shifts, turns and flips.
+    double edgeShare = 0.05;     // push a tree on the edge of the square toward the centre
+    double relocateShare = 0.05; // drop a tree on the edge somewhere inside the square
+    double squeezeShare = 0.01;  // pull every tree toward the centre at once
 };
 
 // Improves the layout in place. Never accepts a move that makes trees collide, and
