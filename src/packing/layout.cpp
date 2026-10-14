@@ -12,7 +12,7 @@ void Layout::add(const Pose &pose) {
 
 void Layout::setPose(std::size_t i, const Pose &pose) {
     poses[i] = pose;
-    placed[i] = geometry::transform(shape, pose);
+    geometry::transformInto(shape, pose, placed[i]);
     boxes[i] = geometry::boundingBox(placed[i]);
 }
 
@@ -23,10 +23,11 @@ void Layout::remove(std::size_t i) {
 }
 
 bool Layout::collidesWithOthers(std::size_t i) const {
+    const Box &bi = boxes[i];
     for (std::size_t j = 0; j < size(); ++j) {
-        if (j != i && geometry::polygonsCollide(placed[i], boxes[i], placed[j], boxes[j])) {
-            return true;
-        }
+        // Cheap box test inline; most trees are far away.
+        if (j == i || !geometry::boxesOverlap(bi, boxes[j])) continue;
+        if (geometry::polygonsCollide(placed[i], bi, placed[j], boxes[j])) return true;
     }
     return false;
 }
@@ -34,6 +35,7 @@ bool Layout::collidesWithOthers(std::size_t i) const {
 bool Layout::isValid() const {
     for (std::size_t i = 0; i < size(); ++i) {
         for (std::size_t j = i + 1; j < size(); ++j) {
+            if (!geometry::boxesOverlap(boxes[i], boxes[j])) continue;
             if (geometry::polygonsCollide(placed[i], boxes[i], placed[j], boxes[j])) return false;
         }
     }
@@ -53,7 +55,7 @@ Box Layout::bounds() const {
 
 double Layout::side() const {
     if (poses.empty()) return 0.0;
-    
+
     const Box b = bounds();
     return std::max(b.maxX - b.minX, b.maxY - b.minY);
 }

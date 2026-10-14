@@ -9,7 +9,7 @@ namespace packer::packing {
 namespace {
 // Square side, plus a small reward for trees sitting near the centre. The pull opens up
 // room inside so trees on the edge can move in later.
-double energy(const Layout &layout, double pullWeight) {
+double energy(const Layout &layout, double pullWeight, double &side) {
     const Box b = layout.bounds();
     const double cx = (b.minX + b.maxX) / 2;
     const double cy = (b.minY + b.maxY) / 2;
@@ -17,7 +17,7 @@ double energy(const Layout &layout, double pullWeight) {
     for (const Box &t : layout.boxes) {
         pull += std::max({t.maxX - cx, cx - t.minX, t.maxY - cy, cy - t.minY});
     }
-    const double side = std::max(b.maxX - b.minX, b.maxY - b.minY);
+    side = std::max(b.maxX - b.minX, b.maxY - b.minY);
     return side + pullWeight * pull / layout.size();
 }
 } // namespace
@@ -27,9 +27,7 @@ void anneal(Layout &layout, const AnnealConfig &cfg, std::mt19937_64 &rng) {
 
     std::uniform_int_distribution<std::size_t> pickTree(0, layout.size() - 1);
     std::uniform_real_distribution<double> unit(0.0, 1.0);
-    auto jiggle = [&](double scale) {
-        return scale * (2 * unit(rng) - 1);
-    };
+    auto jiggle = [&](double scale) { return scale * (2 * unit(rng) - 1); };
 
     // What the current move changed, so it can be undone.
     std::vector<std::pair<std::size_t, Pose>> undo;
@@ -47,9 +45,11 @@ void anneal(Layout &layout, const AnnealConfig &cfg, std::mt19937_64 &rng) {
     const double edgeEnd = cfg.squeezeShare + cfg.edgeShare;
     const double relocateEnd = edgeEnd + cfg.relocateShare;
 
-    double current = energy(layout, cfg.pullWeight);
-    Layout best = layout;
-    double bestSide = layout.side();
+    double currentSide = 0;
+    double current = energy(layout, cfg.pullWeight, currentSide);
+    // Only the poses are saved; the cached polygons are rebuilt once at the end.
+    std::vector<Pose> bestPoses = layout.poses;
+    double bestSide = currentSide;
 
     for (long it = 0; it < cfg.iterations; ++it) {
         // Progress 0 -> 1. Temperature and step size shrink geometrically.
@@ -119,17 +119,20 @@ void anneal(Layout &layout, const AnnealConfig &cfg, std::mt19937_64 &rng) {
             continue;
         }
 
-        const double next = energy(layout, cfg.pullWeight);
+        double nextSide = 0;
+        const double next = energy(layout, cfg.pullWeight, nextSide);
         if (next <= current || unit(rng) < std::exp((current - next) / temp)) {
             current = next;
-            if (layout.side() < bestSide) {
-                bestSide = layout.side();
-                best = layout;
+            if (nextSide < bestSide) {
+                bestSide = nextSide;
+                bestPoses = layout.poses;
             }
         } else {
             revert();
         }
     }
-    layout = std::move(best);
+    for (std::size_t i = 0; i < layout.size(); ++i) {
+        layout.setPose(i, bestPoses[i]);
+    }
 }
 } // namespace packer::packing

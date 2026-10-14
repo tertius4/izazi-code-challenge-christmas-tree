@@ -24,9 +24,13 @@ struct Box {
 };
 
 Polygon transform(const Polygon &shape, const Pose &pose);
+// Same as transform, but writes into `out` and reuses its storage.
+void transformInto(const Polygon &shape, const Pose &pose, Polygon &out);
 Box boundingBox(const Polygon &poly);
 // True if the boxes overlap or touch.
-bool boxesOverlap(const Box &a, const Box &b);
+inline bool boxesOverlap(const Box &a, const Box &b) {
+    return a.minX <= b.maxX && b.minX <= a.maxX && a.minY <= b.maxY && b.minY <= a.maxY;
+}
 double polygonArea(const Polygon &poly);
 // Maps any angle into [0, 360).
 double normalizeDeg(double deg);
