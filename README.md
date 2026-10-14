@@ -28,13 +28,26 @@ This produces the `build/main` executable. The default build type is Release.
 
 ## Use
 
-Run it from the repository root, passing the input CSV:
+Run it from the repository root, passing the input CSV and, optionally, an output path:
 
 ```bash
 ./build/main data/input/tree.csv
+./build/main data/input/tree.csv path/to/out.csv
 ```
 
-The result is written to `data/output/result.csv`. The output directory is created if it doesn't exist. Run from the repository root, because the output path is relative to the working directory.
+By default the result is written to `data/output/results.csv`. The output directory is created if it doesn't exist. The default path is relative to the working directory, so run from the repository root. `--help` prints the usage.
+
+## Test
+
+Unit tests for the CSV reader and writer use GoogleTest. It is used from the system if installed, otherwise downloaded by CMake on first configure (needs network). They are built by default:
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+Pass `-DPACKER_BUILD_TESTS=OFF` to `cmake` to skip them.
+
+## Input format
 
 The input CSV has the columns `vertex,x,y,description`:
 

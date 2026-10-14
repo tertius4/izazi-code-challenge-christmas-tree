@@ -1,11 +1,12 @@
-#include "csv_writer.h"
+#include "io/csv_writer.h"
 
+#include <cstddef>
 #include <fstream>
 
-// Wraps a field in quotes if it contains a comma, quote or newline.
+// Wraps a field in quotes if it contains a comma, quote or line break.
 static std::string escapeField(const std::string &field)
 {
-    if (field.find_first_of(",\"\n") == std::string::npos)
+    if (field.find_first_of(",\"\r\n") == std::string::npos)
     {
         return field;
     }

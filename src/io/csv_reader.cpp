@@ -1,8 +1,10 @@
 #include "io/csv_reader.h"
 
+#include <cstddef>
 #include <fstream>
 #include <iterator>
 #include <stdexcept>
+#include <utility>
 
 namespace packer::io
 {
