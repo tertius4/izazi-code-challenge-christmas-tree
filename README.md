@@ -14,6 +14,7 @@ Requirements: a C++20 compiler (GCC 10+ / Clang 12+) and CMake 3.16+ (`sudo apt 
 ./run.sh test       # build + unit tests
 ./run.sh evaluate   # validate and score the submission with shapely
 ./run.sh visualise 10   # plot the 10-tree layout
+./run.sh visualise-all  # zoomable HTML grid of all 200 layouts (data/output/grid.html)
 ```
 
 A full run uses all cores and takes about 2-5 minutes. Run from the repository root (the default output path is relative).
@@ -41,6 +42,7 @@ The total score is printed at the end. Effort and strategy cutoffs live in `Solv
 | `src/packing` | layout, starts, lattice, annealer, solver |
 | `tests/` | GoogleTest unit tests |
 | `scripts/evaluator.py` | independent validation, scoring and visualisation |
+| `scripts/visualise_grid.py` | zoomable HTML grid of all 200 layouts |
 | `data/` | input tree shape and generated output |
 
 ## Input format
