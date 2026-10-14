@@ -18,6 +18,7 @@ Commands:
   test                    Build, then run the unit tests
   evaluate [submission]   Validate and score a submission (default: $OUTPUT)
   visualise N [submission]  Plot the N-tree layout from a submission
+  visualise-all [submission]  Open a zoomable HTML grid of all configurations
   clean                   Remove the build directory
   menu                    Interactive numbered menu (default with no command)
   help                    Show this message
@@ -30,7 +31,7 @@ build() {
 }
 
 menu() {
-    local items=("Build" "Run" "Test" "Evaluate" "Visualise" "Clean" "Help" "Quit")
+    local items=("Build" "Run" "Test" "Evaluate" "Visualise" "Visualise all" "Clean" "Help" "Quit")
     while true; do
         echo
         for i in "${!items[@]}"; do
@@ -47,9 +48,10 @@ menu() {
             4) read -rp "Submission [$OUTPUT]: " sub; "$0" evaluate "${sub:-$OUTPUT}" ;;
             5) read -rp "Tree count N: " n; read -rp "Submission [$OUTPUT]: " sub
                "$0" visualise "$n" "${sub:-$OUTPUT}" ;;
-            6) "$0" clean ;;
-            7) usage ;;
-            8) exit 0 ;;
+            6) read -rp "Submission [$OUTPUT]: " sub; "$0" visualise-all "${sub:-$OUTPUT}" ;;
+            7) "$0" clean ;;
+            8) usage ;;
+            9) exit 0 ;;
             *) echo "Invalid choice: $choice" ;;
         esac
         set -e
@@ -64,7 +66,7 @@ case "$cmd" in
     run)
         in="${1:-$INPUT}"
         shift || true
-        ./"$BUILD_DIR"/main "$in" "$@"
+        time ./"$BUILD_DIR"/main "$in" "$@"
         ;;
     test)
         build
@@ -76,6 +78,7 @@ case "$cmd" in
         n="$1"
         python3 scripts/evaluator.py "${2:-$OUTPUT}" --visualize "$n"
         ;;
+    visualise-all|visualize-all) python3 scripts/visualise_grid.py "${1:-$OUTPUT}" ;;
     clean) rm -rf "$BUILD_DIR" ;;
     menu) menu ;;
     help|-h|--help) usage ;;

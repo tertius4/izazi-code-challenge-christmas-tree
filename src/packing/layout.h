@@ -38,5 +38,10 @@ struct Layout {
     Box bounds() const;
     // Side of the smallest axis-aligned square containing all trees.
     double side() const;
+
+    // Index of the tree whose removal leaves the smallest square. Requires at least one tree.
+    std::size_t bestTreeToRemove() const;
+    // Trees whose box touches the edge of the box around all trees. Only these decide the side.
+    std::vector<std::size_t> edgeTrees() const;
 };
 } // namespace packer::packing

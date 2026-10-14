@@ -38,11 +38,6 @@ add_executable(main src/main.cpp)
 target_link_libraries(main PRIVATE packer_lib)
 target_compile_options(main PRIVATE -Wall -Wextra)
 
-find_package(OpenMP)
-if(OpenMP_CXX_FOUND)
-  target_link_libraries(packer_lib PUBLIC OpenMP::OpenMP_CXX)
-endif() 
-
 if(PACKER_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)

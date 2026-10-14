@@ -52,11 +52,23 @@ bool pointInPolygon(const Point &p, const Polygon &poly) {
 
 bool polygonsCollide(const Polygon &a, const Box &boxA, const Polygon &b, const Box &boxB) {
     if (!boxesOverlap(boxA, boxB)) return false;
+    
+    // An edge lying wholly outside the other polygon's box can't meet any of its edges.
+    // The margin keeps this a pure speedup: it only skips edges that are clearly apart.
+    constexpr double kMargin = 1e-9;
+    auto edgeOutside = [&](const Point &p, const Point &q, const Box &box) {
+        return std::max(p.x, q.x) < box.minX - kMargin || std::min(p.x, q.x) > box.maxX + kMargin ||
+               std::max(p.y, q.y) < box.minY - kMargin || std::min(p.y, q.y) > box.maxY + kMargin;
+    };
     for (std::size_t i = 0; i < a.size(); ++i) {
         const Point &a1 = a[i];
-        const Point &a2 = a[(i + 1) % a.size()];
+        const Point &a2 = a[i + 1 == a.size() ? 0 : i + 1];
+        if (edgeOutside(a1, a2, boxB)) continue;
         for (std::size_t j = 0; j < b.size(); ++j) {
-            if (segmentsIntersect(a1, a2, b[j], b[(j + 1) % b.size()])) return true;
+            const Point &b1 = b[j];
+            const Point &b2 = b[j + 1 == b.size() ? 0 : j + 1];
+            if (edgeOutside(b1, b2, boxA)) continue;
+            if (segmentsIntersect(a1, a2, b1, b2)) return true;
         }
     }
     // No edges meet: the polygons are apart, or one is completely inside the other.
