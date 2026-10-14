@@ -10,6 +10,7 @@ if(NOT GTest_FOUND)
 endif()
 
 add_executable(csv_tests
+  args_test.cpp
   csv_reader_test.cpp
   csv_writer_test.cpp
 )

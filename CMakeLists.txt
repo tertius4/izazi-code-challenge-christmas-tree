@@ -12,6 +12,7 @@ endif()
 option(PACKER_BUILD_TESTS "Build unit tests" ON)
 
 add_library(packer_lib
+  src/cli/args.cpp
   src/io/csv_reader.cpp
   src/io/csv_writer.cpp
 )

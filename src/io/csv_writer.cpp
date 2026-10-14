@@ -4,15 +4,12 @@
 #include <fstream>
 
 // Wraps a field in quotes if it contains a comma, quote or line break.
-static std::string escapeField(const std::string &field)
-{
-    if (field.find_first_of(",\"\r\n") == std::string::npos)
-    {
+static std::string escapeField(const std::string &field) {
+    if (field.find_first_of(",\"\r\n") == std::string::npos) {
         return field;
     }
     std::string result = "\"";
-    for (char c : field)
-    {
+    for (char c : field) {
         if (c == '"')
             result += "\"\""; // a quote is escaped by doubling it
         else
@@ -22,24 +19,19 @@ static std::string escapeField(const std::string &field)
     return result;
 }
 
-namespace packer::io
-{
-    bool writeCsv(const std::string &path, const std::vector<std::vector<std::string>> &data)
-    {
-        std::ofstream out(path);
-        if (!out)
-            return false;
+namespace packer::io {
+bool writeCsv(const std::string &path, const std::vector<std::vector<std::string>> &data) {
+    std::ofstream out(path);
+    if (!out) return false;
 
-        for (const auto &row : data)
-        {
-            for (size_t i = 0; i < row.size(); ++i)
-            {
-                if (i > 0)
-                    out << ",";
-                out << escapeField(row[i]);
-            }
-            out << "\n";
+    for (const auto &row : data) {
+        for (size_t i = 0; i < row.size(); ++i) {
+            if (i > 0) out << ",";
+            out << escapeField(row[i]);
         }
-        return out.good();
+        out << "\n";
     }
+
+    return out.good();
 }
+} // namespace packer::io
