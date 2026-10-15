@@ -48,11 +48,4 @@ struct Solution {
 };
 
 Solution solveAll(const SolverConfig &cfg);
-
-// Searches for dense lattices from random cells and keeps the `latticeKeep` densest distinct
-// ones. solveAll runs this first; it is public for benchmarks.
-std::vector<LatticeParams> findLattices(const SolverConfig &cfg);
-
-// Kaggle score: sum over n of side^2 / n. Lower is better.
-double score(const Solution &solution);
 } // namespace packer::packing

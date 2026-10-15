@@ -133,7 +133,7 @@ TEST(Solver, SmallRunIsValid) {
         EXPECT_EQ(static_cast<int>(sol.layouts[n].size()), n);
         EXPECT_TRUE(sol.layouts[n].isValid()) << "n=" << n;
     }
-    EXPECT_GT(score(sol), 0.0);
+    EXPECT_GT(totalScore(sol.layouts), 0.0);
 }
 
 TEST(Improver, KeepsLayoutsValidAndNeverWorse) {

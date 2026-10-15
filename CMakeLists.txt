@@ -40,10 +40,6 @@ add_executable(main src/main.cpp)
 target_link_libraries(main PRIVATE packer_lib)
 target_compile_options(main PRIVATE -Wall -Wextra)
 
-add_executable(bench src/bench.cpp)
-target_link_libraries(bench PRIVATE packer_lib)
-target_compile_options(bench PRIVATE -Wall -Wextra)
-
 if(PACKER_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)

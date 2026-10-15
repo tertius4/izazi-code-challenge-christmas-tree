@@ -3,16 +3,17 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <iostream>
 #include <iomanip>
+#include <iostream>
 #include <limits>
 #include <optional>
 #include <random>
 #include <sstream>
 #include <utility>
 
-#include "packing/rotation.h"
+#include "packing/improver.h"
 #include "packing/lattice.h"
+#include "packing/rotation.h"
 #include "packing/starts.h"
 
 namespace packer::packing {
@@ -37,10 +38,10 @@ bool sameCut(const LatticeParams &p, const LatticeParams &q) {
     return std::abs(fold(p.deg) - fold(q.deg)) < 0.5 && std::abs(p.a - q.a) < 1e-3 &&
            std::abs(p.b - q.b) < 1e-3;
 }
-} // namespace
 
-// The searches end in different local optima, and the densest pattern is often not the one
-// that cuts best into a square, so keeping several pays off.
+// Searches for dense lattices from random cells and keeps the `latticeKeep` densest distinct
+// ones. The searches end in different local optima, and the densest pattern is often not the
+// one that cuts best into a square, so keeping several pays off.
 std::vector<LatticeParams> findLattices(const SolverConfig &cfg) {
     std::vector<std::optional<LatticeParams>> found(cfg.latticeStarts);
 #pragma omp parallel for schedule(dynamic)
@@ -71,7 +72,6 @@ std::vector<LatticeParams> findLattices(const SolverConfig &cfg) {
     return lattices;
 }
 
-namespace {
 struct Start {
     Layout layout;
     std::string origin;
@@ -95,7 +95,7 @@ std::vector<Start> startsFor(int n, const std::vector<LatticeParams> &lattices,
     random.startStep = cfg.randomStep;
     // A lattice cut is already dense: refine it, gently (cold) or with the usual heat.
     AnnealConfig lattice = cfg.anneal;
-    lattice.iterations = (n > cfg.mediumMax   ? cfg.largeItersPerTree
+    lattice.iterations = (n > cfg.mediumMax  ? cfg.largeItersPerTree
                           : n > cfg.smallMax ? cfg.mediumItersPerTree
                                              : cfg.itersPerTree) *
                          n;
@@ -171,8 +171,13 @@ Solution solveAll(const SolverConfig &cfg) {
     // Each n is independent: spread them over all cores, slowest first so no core is left
     // with a long job at the end. The small n, with their many random starts, are slowest.
     std::vector<int> order;
-    for (int n = std::min(cfg.smallMax, cfg.maxN); n >= 1; --n) order.push_back(n);
-    for (int n = cfg.maxN; n > cfg.smallMax; --n) order.push_back(n);
+    for (int n = std::min(cfg.smallMax, cfg.maxN); n >= 1; --n) {
+        order.push_back(n);
+    }
+
+    for (int n = cfg.maxN; n > cfg.smallMax; --n) {
+        order.push_back(n);
+    }
 
 #pragma omp parallel for schedule(dynamic)
     for (std::size_t k = 0; k < order.size(); ++k) {
@@ -261,19 +266,11 @@ Solution solveAll(const SolverConfig &cfg) {
                 changed = true;
             }
         }
-        std::cout << "[" << elapsed() << "s] pass " << pass << ": score " << score(sol)
+
+        std::cout << "[" << elapsed() << "s] pass " << pass << ": score " << totalScore(sol.layouts)
                   << (changed ? "" : " (no change)") << std::endl;
         if (!changed) break;
     }
     return sol;
-}
-
-double score(const Solution &solution) {
-    double total = 0;
-    for (std::size_t n = 1; n < solution.layouts.size(); ++n) {
-        const double s = solution.layouts[n].side();
-        total += s * s / static_cast<double>(n);
-    }
-    return total;
 }
 } // namespace packer::packing

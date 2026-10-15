@@ -20,7 +20,6 @@ Commands:
   evaluate [submission]   Validate and score a submission (default: $OUTPUT)
   visualise N [submission]  Plot the N-tree layout from a submission
   visualise-all [submission]  Open a zoomable HTML grid of all configurations
-  bench <mode> [args]     Quick benchmarks without a full run (see ./build/bench)
   clean                   Remove the build directory
   menu                    Interactive numbered menu (default with no command)
   help                    Show this message
@@ -70,7 +69,6 @@ case "$cmd" in
         build
         ctest --test-dir "$BUILD_DIR" --output-on-failure
         ;;
-    bench) ./"$BUILD_DIR"/bench "$@" ;;
     evaluate) python3 scripts/evaluator.py "${1:-$OUTPUT}" ;;
     visualise|visualize)
         [[ $# -ge 1 ]] || { echo "visualise needs a tree count N" >&2; exit 1; }

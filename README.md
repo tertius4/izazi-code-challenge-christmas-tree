@@ -20,9 +20,6 @@ Requirements: a C++20 compiler (GCC 10+ / Clang 12+) and CMake 3.16+ (`sudo apt 
 ./run.sh evaluate   # validate and score data/current-best/results.csv with shapely
 ./run.sh visualise 10   # plot the 10-tree layout
 ./run.sh visualise-all  # zoomable HTML grid of all 200 layouts (grid.html next to results.csv)
-./run.sh bench improve anneal large   # quick check of one stage on a few n
-./run.sh bench patterns                # lattice search and the best cuts for a few large n
-./run.sh bench band 31                 # build n <= 31 from scratch (small and medium bands)
 ```
 
 Run from the repository root (the default paths are relative). Every improvement is printed as
@@ -67,7 +64,6 @@ If `data/current-best/results.csv` doesn't exist, the first run builds every lay
 | `src/tree` | the tree: outline, convex parts, collision test |
 | `src/geometry` | general polygon code (used by tests, lattice cuts and rotation) |
 | `src/packing` | layout, starts, lattice, annealer, rotation, improver, solver |
-| `src/bench.cpp` | quick benchmarks on a few n, without a full run |
 | `tests/` | GoogleTest unit tests |
 | `scripts/evaluator.py` | independent validation, scoring and visualisation |
 | `scripts/visualise_grid.py` | zoomable HTML grid of all 200 layouts |
