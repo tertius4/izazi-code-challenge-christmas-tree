@@ -31,6 +31,8 @@ struct Layout {
 
     // True if tree i overlaps or touches any other tree.
     bool collidesWithOthers(std::size_t i) const;
+    // Indices of the other trees that tree i overlaps or touches.
+    std::vector<std::size_t> collidingWith(std::size_t i) const;
     // True if no pair of trees collides. Checks every pair, so use it for verification.
     bool isValid() const;
 

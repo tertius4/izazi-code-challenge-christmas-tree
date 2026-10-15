@@ -53,3 +53,6 @@ The downside is that the execution time on my machine is now up to 5 minutes :(
 That sucks, but I don't think it's a big issue in production. Just go make a cup of coffee in the meantime.
 
 This took me about 7 hours in total. To round off a "day's work", I went through the code once more to make sure it is easy to understand.
+
+## Optimisation
+I took a break, and thought about the code a bit. I think I called "Finishing off" too quickly. Surely, I should be able to do better than 75 in 5 mins...

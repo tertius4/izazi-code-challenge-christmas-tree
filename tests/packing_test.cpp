@@ -1,6 +1,7 @@
 #include "io/csv_reader.h"
 #include "io/tree_loader.h"
 #include "packing/annealer.h"
+#include "packing/compactor.h"
 #include "packing/lattice.h"
 #include "packing/solver.h"
 #include "packing/starts.h"
@@ -34,12 +35,11 @@ TEST(Starts, RandomStartIsValid) {
 
 TEST(Starts, BestSingleBeatsUpright) { EXPECT_LE(bestSingle(tree()).side(), 1.0); }
 
-// One lattice search shared by the tests below, with the solver's effort per search
-// (it takes a couple of seconds). Fewer tries or tweaks often end in a poor local minimum.
+// One short lattice search shared by the tests below.
 const LatticeParams &testLattice() {
     static const LatticeParams lattice = [] {
-        std::mt19937_64 rng(9);
-        return findLattice(tree(), 0, 8, 100, rng).value();
+        std::mt19937_64 rng(1);
+        return findLattice(tree(), 10000, rng).value();
     }();
     return lattice;
 }
@@ -97,15 +97,44 @@ TEST(Annealer, StaysValidAndNeverWorse) {
     EXPECT_LE(l.side(), before);
 }
 
+TEST(Layout, CollidingWithAgreesWithCollidesWithOthers) {
+    Layout l(tree());
+    l.add({0, 0, 0});
+    l.add({0.1, 0.1, 30});
+    l.add({5, 5, 0});
+    EXPECT_EQ(l.collidingWith(0), std::vector<std::size_t>{1});
+    EXPECT_TRUE(l.collidingWith(2).empty());
+    EXPECT_EQ(l.collidesWithOthers(1), !l.collidingWith(1).empty());
+}
+
+TEST(Compactor, RotateWholeKeepsValidAndNeverWorse) {
+    Layout l = cutLattice(tree(), testLattice(), 12);
+    const double before = l.side();
+    rotateWhole(l);
+    EXPECT_TRUE(l.isValid());
+    EXPECT_LE(l.side(), before);
+}
+
+TEST(Compactor, CompactKeepsValidAndNeverWorse) {
+    std::mt19937_64 rng(3);
+    Layout l = randomStart(tree(), 6, rng);
+    const double before = l.side();
+    compact(l, rng, 100);
+    EXPECT_EQ(l.size(), 6u);
+    EXPECT_TRUE(l.isValid());
+    EXPECT_LE(l.side(), before);
+}
+
 TEST(Solver, SmallRunIsValid) {
     SolverConfig cfg;
     cfg.maxN = 15;
     cfg.itersPerTree = 200;
     cfg.restarts = 2;
+    cfg.randomItersPerTree = 200;
+    cfg.mediumRandom = 1;
     cfg.latticeStarts = 2;
     cfg.latticeKeep = 2;
-    cfg.latticeTries = 2;
-    cfg.latticeTweaks = 10;
+    cfg.latticeIters = 200;
     const Solution sol = solveAll(tree(), cfg);
     for (int n = 1; n <= cfg.maxN; ++n) {
         EXPECT_EQ(static_cast<int>(sol.layouts[n].size()), n);

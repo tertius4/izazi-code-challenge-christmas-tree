@@ -1,7 +1,7 @@
 # Christmas Tree Solution
 
 A C++20 command-line tool.
-The total score is ±75. Design notes and thought process are in [APPROACH.md](APPROACH.md).
+The total score is ±72.0. Design notes and thought process are in [APPROACH.md](APPROACH.md).
 
 ## Quick start
 
@@ -17,7 +17,7 @@ Requirements: a C++20 compiler (GCC 10+ / Clang 12+) and CMake 3.16+ (`sudo apt 
 ./run.sh visualise-all  # zoomable HTML grid of all 200 layouts (data/output/grid.html)
 ```
 
-A full run uses all cores and takes about 2-5 minutes. Run from the repository root (the default output path is relative).
+A full run uses all cores and takes about 20-25 minutes (on a 16-thread laptop CPU); the log shows elapsed seconds per step. Run from the repository root (the default output path is relative).
 
 ## Output
 
@@ -29,9 +29,9 @@ The total score is printed at the end. Effort and strategy cutoffs live in `Solv
 ## How it works
 
 - **Geometry**: rotate/shift a polygon; collisions via edge intersection + point-in-polygon. Touching counts as a collision, so layouts keep a tiny gap.
-- **Starting layouts**: exact rotation scan for N=1, random non-overlapping layouts, and cuts from double lattices (two interlocking trees per cell, the second turned 180°; tilt, spacing and offsets are tuned to make the cell small).
+- **Starting layouts**: exact rotation scan for N=1, random non-overlapping layouts, and cuts from double lattices (two interlocking trees per cell, the second turned 180°). Each lattice search anneals a random cell (tilt, shape and offsets) and keeps it as small as it stays valid; many distinct lattices are kept, since the densest one is often not the one that cuts best into a square.
 - **Simulated annealing**: moves, rotates or flips one tree at a time, rejecting collisions, plus compaction moves on the trees that set the square's side.
-- **Strategy bands**: small N use many random starts, medium N lattices plus random starts, large N the best two lattices. Finally, a layout for N+1 with one tree removed replaces N if smaller.
+- **Strategy bands**: small N (≤12) use 100 long, hot random starts; medium N (≤30) the best lattice cuts plus random starts; large N a long cold anneal of the two best lattice cuts. Finally, neighbouring N help each other: N+1 minus a tree, or N-1 plus a tree, replaces N if smaller.
 
 ## Layout
 

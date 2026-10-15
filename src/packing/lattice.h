@@ -28,11 +28,10 @@ Pose latticePose(const LatticeParams &p, int i, int j, bool second);
 // True if no two trees of the infinite lattice collide.
 bool latticeIsValid(const Polygon &shape, const LatticeParams &p);
 
-// Searches for the tightest valid lattice with A turned about startDeg: `starts` random
-// placements of B and row shifts, each improved by `tweaks` small random changes.
-// Returns nothing if no start gave a valid lattice.
-std::optional<LatticeParams> findLattice(const Polygon &shape, double startDeg, int starts,
-                                         int tweaks, std::mt19937_64 &rng);
+// Searches for the tightest valid lattice: a random cell improved by simulated annealing
+// over its angle, shape and the place of B. Returns nothing if no valid cell was found.
+std::optional<LatticeParams> findLattice(const Polygon &shape, long iterations,
+                                         std::mt19937_64 &rng);
 
 // The n trees of the lattice that fit in the smallest square.
 Layout cutLattice(const Polygon &shape, const LatticeParams &p, int n);

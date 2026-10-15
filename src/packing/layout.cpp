@@ -32,6 +32,16 @@ bool Layout::collidesWithOthers(std::size_t i) const {
     return false;
 }
 
+std::vector<std::size_t> Layout::collidingWith(std::size_t i) const {
+    std::vector<std::size_t> hits;
+    const Box &bi = boxes[i];
+    for (std::size_t j = 0; j < size(); ++j) {
+        if (j == i || !geometry::boxesOverlap(bi, boxes[j])) continue;
+        if (geometry::polygonsCollide(placed[i], bi, placed[j], boxes[j])) hits.push_back(j);
+    }
+    return hits;
+}
+
 bool Layout::isValid() const {
     for (std::size_t i = 0; i < size(); ++i) {
         for (std::size_t j = i + 1; j < size(); ++j) {

@@ -10,7 +10,6 @@ namespace packer::packing {
 namespace {
 using geometry::Point;
 
-constexpr double kMinStep = 0.05; // far below any valid step; keeps the neighbour loops bounded
 constexpr double kTol = 1e-9;     // slack when testing whether a box lies inside a square
 
 // Where B sits relative to A in the same cell: s·u + t·v.
@@ -45,34 +44,6 @@ bool collidesShifted(const Polygon &fixed, const Box &fixedBox, const Polygon &o
     return geometry::polygonsCollide(fixed, fixedBox, moved, movedBox);
 }
 
-// The smallest value in [lo, hi] for which isValid holds. `hi` must be valid. Interlocking
-// trees can collide at some size and fit again at a smaller one, so a plain bisection would
-// stop at the first collision. Instead: scan downward on a geometric grid for the smallest
-// valid point, then bisect between it and the next (invalid) grid point below.
-template <class IsValid> double smallestValid(double lo, double hi, IsValid isValid) {
-    constexpr int kScan = 120;
-    const double ratio = std::pow(lo / hi, 1.0 / kScan);
-    double best = hi;
-    double below = hi * ratio;
-    double v = hi;
-    for (int k = 1; k <= kScan; ++k) {
-        v *= ratio;
-        if (isValid(v)) {
-            best = v;
-            below = v * ratio;
-        }
-    }
-    for (int i = 0; i < 40; ++i) {
-        const double mid = (below + best) / 2;
-        if (isValid(mid)) {
-            best = mid;
-        } else {
-            below = mid;
-        }
-    }
-    return best;
-}
-
 double wrap01(double x) {
     return x - std::floor(x);
 }
@@ -81,31 +52,33 @@ double wrapHalf(double x) {
     return x - std::floor(x + 0.5);
 }
 
-// Makes the cell as small as possible for p's deg, h, s and t: shrink a, then b, and repeat
-// once, because a smaller b can free up room for a smaller a. Returns false if even a roomy
-// cell collides (B sits on top of A).
-bool shrink(const Polygon &shape, LatticeParams &p) {
-    const double roomy = 4.0 * reachOf(shape);
-    p.a = roomy;
-    p.b = roomy;
-    if (!latticeIsValid(shape, p)) return false;
-    for (int round = 0; round < 2; ++round) {
-        p.a = smallestValid(kMinStep, p.a, [&](double v) {
-            LatticeParams q = p;
-            q.a = v;
-            return latticeIsValid(shape, q);
-        });
-        p.b = smallestValid(kMinStep, p.b, [&](double v) {
-            LatticeParams q = p;
-            q.b = v;
-            return latticeIsValid(shape, q);
-        });
+// Scales the cell (a and b together, so B keeps its place in the cell) down to about the
+// smallest size that is still valid. A colliding cell is first grown until it is valid.
+// Returns false if no valid size was found.
+bool tighten(const Polygon &shape, LatticeParams &p) {
+    auto scaled = [&](double f) {
+        LatticeParams q = p;
+        q.a *= f;
+        q.b *= f;
+        return q;
+    };
+    double hi = 1.0;
+    while (!latticeIsValid(shape, scaled(hi))) {
+        hi *= 1.1;
+        if (hi > 20) return false; // B sits on top of A: no size works
+    }
+    double lo = hi * 0.7;
+    for (int i = 0; i < 32; ++i) {
+        const double mid = (lo + hi) / 2;
+        if (latticeIsValid(shape, scaled(mid))) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
     }
     // Back off by a hair, so rounding far from the origin can never turn a touch into an overlap.
-    LatticeParams safer = p;
-    safer.a *= 1 + 1e-9;
-    safer.b *= 1 + 1e-9;
-    if (latticeIsValid(shape, safer)) p = safer;
+    const LatticeParams safer = scaled(hi * (1 + 1e-9));
+    p = latticeIsValid(shape, safer) ? safer : scaled(hi);
     return true;
 }
 } // namespace
@@ -152,36 +125,57 @@ bool latticeIsValid(const Polygon &shape, const LatticeParams &p) {
     return true;
 }
 
-std::optional<LatticeParams> findLattice(const Polygon &shape, double startDeg, int starts,
-                                         int tweaks, std::mt19937_64 &rng) {
+std::optional<LatticeParams> findLattice(const Polygon &shape, long iterations,
+                                         std::mt19937_64 &rng) {
     std::uniform_real_distribution<double> unit(0.0, 1.0);
     auto jiggle = [&](double step) {
         return step * (2 * unit(rng) - 1);
     };
 
-    std::optional<LatticeParams> best;
-    for (int k = 0; k < starts; ++k) {
-        LatticeParams p;
-        p.deg = startDeg;
+    // A random cell, roomy enough that tighten() only has to shrink it.
+    LatticeParams p;
+    for (int attempt = 0;; ++attempt) {
+        if (attempt == 100) return std::nullopt;
+        p.deg = 360 * unit(rng);
+        p.a = 2 * reachOf(shape) * (1 + unit(rng));
+        p.b = 2 * reachOf(shape) * (1 + unit(rng));
         p.h = unit(rng) - 0.5;
         p.s = unit(rng);
         p.t = unit(rng);
-        if (!shrink(shape, p)) continue;
-
-        // Local search: nudge the shape of the cell, re-shrink, keep it if the area went down.
-        for (int it = 0; it < tweaks; ++it) {
-            // Big nudges first, fine ones at the end: 0.1 down to 0.001.
-            const double step = 0.1 * std::pow(0.01, static_cast<double>(it) / tweaks);
-            LatticeParams q = p;
-            q.deg += 30 * jiggle(step); // ±3° down to ±0.03°
-            q.h = wrapHalf(q.h + jiggle(step));
-            q.s = wrap01(q.s + jiggle(step));
-            q.t = wrap01(q.t + jiggle(step));
-            if (shrink(shape, q) && areaPerTree(q) < areaPerTree(p)) p = q;
-        }
-
-        if (!best || areaPerTree(p) < areaPerTree(*best)) best = p;
+        if (tighten(shape, p)) break;
     }
+
+    // Simulated annealing on the shape of the cell. Every candidate is tightened, so the
+    // search only ever compares cells that are as small as they can be.
+    LatticeParams best = p;
+    double current = areaPerTree(p);
+    for (long it = 0; it < iterations; ++it) {
+        const double progress = static_cast<double>(it) / iterations;
+        const double step = 0.05 * std::pow(0.002, progress); // 0.05 down to 0.0001
+        const double temp = 0.01 * std::pow(1e-4, progress);
+
+        LatticeParams q = p;
+        const int kind = static_cast<int>(6 * unit(rng));
+        const bool all = kind == 5;
+        if (kind == 0 || all) q.deg += 30 * jiggle(step);
+        if (kind == 1 || all) { // stretch one way, squash the other
+            const double r = std::exp(jiggle(step));
+            q.a *= r;
+            q.b /= r;
+        }
+        if (kind == 2 || all) q.h = wrapHalf(q.h + jiggle(step));
+        if (kind == 3 || all) q.s = wrap01(q.s + jiggle(step));
+        if (kind == 4 || all) q.t = wrap01(q.t + jiggle(step));
+        if (!tighten(shape, q)) continue;
+
+        const double next = areaPerTree(q);
+        if (next < current || unit(rng) < std::exp((current - next) / temp)) {
+            p = q;
+            current = next;
+            if (next < areaPerTree(best)) best = q;
+        }
+    }
+    best.deg = geometry::normalizeDeg(best.deg);
     return best;
 }
 

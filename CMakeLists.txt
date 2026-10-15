@@ -24,6 +24,7 @@ add_library(packer_lib
   src/packing/starts.cpp
   src/packing/lattice.cpp
   src/packing/annealer.cpp
+  src/packing/compactor.cpp
   src/packing/solver.cpp
 )
 
