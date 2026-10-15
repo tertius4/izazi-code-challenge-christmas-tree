@@ -82,6 +82,13 @@ This is me and the tree! (…or the Christmas forest)
 
 Goodbye, `tree.csv`: the tree is now hard-coded as four convex parts, which makes collision checks much faster.
 
+It was a bit sad to let go, because the general approach did work. Before hard-coding the tree, I swapped `tree.csv` for other symmetric polygons, and the same program packed them without changing a line of code:
+
+<p align="center">
+  <img src="./assets/star.webp" alt="169 five-pointed stars packed into a square with side length 8.91" width="380">
+  <img src="./assets/hexagon.webp" alt="121 hexagons packed into a square with side length 7.62" width="380">
+</p>
+
 ### Trial and Error
 
 This meant letting AI try approaches, testing them, discarding what did not work and keeping what did. So I started branching in GitHub, and had AI write a benchmark script for a sneak peek at whether a new strategy works, without waiting for all 200 packings, which by now took 50 minutes!
