@@ -11,6 +11,7 @@ void transformInto(const Polygon &shape, const Pose &pose, Polygon &out) {
     const double rad = pose.deg * std::numbers::pi / 180.0;
     const double c = std::cos(rad);
     const double s = std::sin(rad);
+
     out.resize(shape.size());
     for (std::size_t i = 0; i < shape.size(); ++i) {
         const Point &p = shape[i];
@@ -22,6 +23,7 @@ void transformInto(const Polygon &shape, const Pose &pose, Polygon &out) {
 Polygon transform(const Polygon &shape, const Pose &pose) {
     Polygon out;
     transformInto(shape, pose, out);
+
     return out;
 }
 
@@ -34,6 +36,7 @@ Box boundingBox(const Polygon &poly) {
         b.maxX = std::max(b.maxX, p.x);
         b.maxY = std::max(b.maxY, p.y);
     }
+
     return b;
 }
 
@@ -45,6 +48,7 @@ double polygonArea(const Polygon &poly) {
         const Point &b = poly[(i + 1) % poly.size()];
         sum += a.x * b.y - b.x * a.y;
     }
+
     return std::abs(sum) / 2.0;
 }
 

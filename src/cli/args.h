@@ -6,9 +6,9 @@
 
 namespace packer::cli {
 struct Args {
-    double minutes = 10;                       // time budget for improving
-    int threads = 0;                           // 0: half the cores
-    int minN = 1;                              // only work on n in [minN, maxN]
+    double minutes = 10; // time budget for improving
+    int threads = 0;     // 0: half the cores
+    int minN = 1;        // only work on n in [minN, maxN]
     int maxN = 200;
     std::string bestDir = "data/current-best"; // best-known layouts: read, improved, saved
     bool help = false;

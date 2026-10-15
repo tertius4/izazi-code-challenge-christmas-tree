@@ -31,6 +31,7 @@ void writeAtomically(const fs::path &path, const std::vector<std::vector<std::st
     if (!packer::io::writeCsv(tmp.string(), rows)) {
         throw std::runtime_error("Failed to write " + tmp.string());
     }
+
     fs::rename(tmp, path);
 }
 
@@ -42,19 +43,28 @@ packer::packing::Solution load(const fs::path &dir) {
     if (sol.layouts.size() != 201) {
         throw std::runtime_error("results.csv must hold layouts for n = 1..200");
     }
+
     for (std::size_t n = 1; n < sol.layouts.size(); ++n) {
-        if (sol.layouts[n].size() != n || !sol.layouts[n].isValid()) {
+        const Layout &layout = sol.layouts[n];
+        const bool validLayout = layout.size() == n && layout.isValid();
+        if (!validLayout) {
             throw std::runtime_error("results.csv: invalid layout for n=" + std::to_string(n));
         }
     }
+
     sol.origins.assign(sol.layouts.size(), "loaded");
     if (fs::exists(dir / "report.csv")) {
         for (const auto &row : packer::io::readCsv((dir / "report.csv").string())) {
-            if (row.size() < 4 || row[0] == "n" || row[0] == "total") continue;
+            if (row.size() < 4) continue;
+
+            const bool isHeaderOrTotal = row[0] == "n" || row[0] == "total";
+            if (isHeaderOrTotal) continue;
+
             const std::size_t n = std::stoul(row[0]);
             if (n < sol.origins.size()) sol.origins[n] = row[3];
         }
     }
+
     return sol;
 }
 
@@ -62,6 +72,7 @@ void save(const fs::path &dir, const std::vector<Layout> &layouts,
           const std::vector<std::string> &origins) {
     // reportTable checks every layout again before anything is written.
     const auto report = packer::io::reportTable({layouts, origins});
+
     fs::create_directories(dir);
     writeAtomically(dir / "results.csv", packer::io::submissionTable(layouts));
     writeAtomically(dir / "report.csv", report);
@@ -74,6 +85,7 @@ int main(int argc, char *argv[]) {
         packer::cli::printUsage(std::cerr);
         return 1;
     }
+
     if (args->help) {
         packer::cli::printUsage(std::cout);
         return 0;
@@ -90,6 +102,7 @@ int main(int argc, char *argv[]) {
             sol = packer::packing::solveAll(packer::packing::SolverConfig{});
             save(dir, sol.layouts, sol.origins);
         }
+
         const double before = packer::packing::totalScore(sol.layouts);
 
         packer::packing::ImproveConfig cfg;
@@ -97,12 +110,13 @@ int main(int argc, char *argv[]) {
         cfg.threads = args->threads;
         cfg.minN = args->minN;
         cfg.maxN = args->maxN;
+
         std::signal(SIGINT, onInterrupt);
-        packer::packing::improve(sol.layouts, sol.origins, cfg, stopRequested,
-                                 [&](const std::vector<Layout> &layouts,
-                                     const std::vector<std::string> &origins) {
-                                     save(dir, layouts, origins);
-                                 });
+        packer::packing::improve(
+            sol.layouts, sol.origins, cfg, stopRequested,
+            [&](const std::vector<Layout> &layouts, const std::vector<std::string> &origins) {
+                save(dir, layouts, origins);
+            });
 
         const double after = packer::packing::totalScore(sol.layouts);
         std::cout << "Score: " << before << " -> " << after << "\n"
@@ -111,5 +125,6 @@ int main(int argc, char *argv[]) {
         std::cerr << "Error: " << e.what() << "\n";
         return 1;
     }
+
     return 0;
 }

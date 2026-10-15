@@ -25,7 +25,9 @@ class TempDirTest : public ::testing::Test {
         std::filesystem::remove_all(dir_, ec);
     }
 
-    std::string path(const std::string &name) const { return (dir_ / name).string(); }
+    std::string path(const std::string &name) const {
+        return (dir_ / name).string();
+    }
 
     std::string writeFile(const std::string &name, const std::string &content) const {
         const std::string p = path(name);

@@ -6,16 +6,23 @@
 namespace packer::cli {
 std::optional<Args> parseArgs(int argc, const char *const argv[]) {
     Args args;
+
     try {
         for (int i = 1; i < argc; ++i) {
             const std::string flag = argv[i];
-            if (flag == "--help" || flag == "-h") {
+            const bool wantsHelp = flag == "--help" || flag == "-h";
+            if (wantsHelp) {
                 args.help = true;
                 continue;
             }
-            if (i + 1 >= argc) return std::nullopt; // every other flag takes a value
+
+            // Every other flag takes a value.
+            const bool hasValue = i + 1 < argc;
+            if (!hasValue) return std::nullopt;
+
             const std::string value = argv[++i];
             std::size_t used = 0;
+
             if (flag == "--minutes") {
                 args.minutes = std::stod(value, &used);
                 if (args.minutes <= 0) return std::nullopt;
@@ -28,24 +35,29 @@ std::optional<Args> parseArgs(int argc, const char *const argv[]) {
                 args.minN = std::stoi(first, &used);
                 if (used != first.size()) return std::nullopt;
                 args.maxN = args.minN;
-                if (dash != std::string::npos) {
+                const bool isRange = dash != std::string::npos;
+                if (isRange) {
                     const std::string second = value.substr(dash + 1);
                     args.maxN = std::stoi(second, &used);
                     if (used != second.size()) return std::nullopt;
                 }
                 used = value.size();
-                if (args.minN < 1 || args.maxN > 200 || args.minN > args.maxN) return std::nullopt;
+                const bool inBounds = args.minN >= 1 && args.maxN <= 200;
+                const bool inOrder = args.minN <= args.maxN;
+                if (!inBounds || !inOrder) return std::nullopt;
             } else if (flag == "--best") {
                 args.bestDir = value;
                 used = value.size();
             } else {
                 return std::nullopt;
             }
+
             if (used != value.size()) return std::nullopt; // trailing junk, like "10x"
         }
     } catch (const std::logic_error &) { // stod/stoi on a non-number
         return std::nullopt;
     }
+
     return args;
 }
 

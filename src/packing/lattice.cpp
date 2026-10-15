@@ -10,7 +10,7 @@ namespace packer::packing {
 namespace {
 using geometry::Point;
 
-constexpr double kTol = 1e-9;     // slack when testing whether a box lies inside a square
+constexpr double kTol = 1e-9; // slack when testing whether a box lies inside a square
 
 // Where B sits relative to A in the same cell: s·u + t·v.
 Point offsetB(const LatticeParams &p) {
@@ -42,11 +42,13 @@ bool tighten(LatticeParams &p) {
         q.b *= f;
         return q;
     };
+
     double hi = 1.0;
     while (!latticeIsValid(scaled(hi))) {
         hi *= 1.1;
         if (hi > 20) return false; // B sits on top of A: no size works
     }
+
     double lo = hi * 0.7;
     for (int i = 0; i < 32; ++i) {
         const double mid = (lo + hi) / 2;
@@ -56,9 +58,11 @@ bool tighten(LatticeParams &p) {
             lo = mid;
         }
     }
+
     // Back off by a hair, so rounding far from the origin can never turn a touch into an overlap.
     const LatticeParams safer = scaled(hi * (1 + 1e-9));
     p = latticeIsValid(safer) ? safer : scaled(hi);
+
     return true;
 }
 } // namespace
@@ -70,7 +74,9 @@ double areaPerTree(const LatticeParams &p) {
 Pose latticePose(const LatticeParams &p, int i, int j, bool second) {
     const double x = i * p.a + j * p.h * p.a;
     const double y = j * p.b;
+
     if (!second) return {x, y, p.deg};
+
     const Point d = offsetB(p);
     return {x + d.x, y + d.y, p.deg + 180};
 }
@@ -86,42 +92,49 @@ bool latticeIsValid(const LatticeParams &p) {
     // Two trees can only touch if their origins are within 2 reaches; B is a further |d| away.
     const double range = 2 * kReach + std::hypot(d.x, d.y);
     const int maxJ = static_cast<int>(std::ceil(range / p.b)) + 1;
+
     for (int j = -maxJ; j <= maxJ; ++j) {
         const double rowX = j * p.h * p.a;
         const int minI = static_cast<int>(std::floor((-range - rowX) / p.a)) - 1;
         const int maxI = static_cast<int>(std::ceil((range - rowX) / p.a)) + 1;
+
         for (int i = minI; i <= maxI; ++i) {
             for (bool second : {false, true}) {
-                if (!second && i == 0 && j == 0) continue; // A(0,0) itself
+                const bool isTreeA = !second && i == 0 && j == 0;
+                if (isTreeA) continue;
+
                 const Pose pose = latticePose(p, i, j, second);
                 // Most neighbours are too far away to touch: skip placing them.
                 const double dx = pose.x;
                 const double dy = pose.y;
-                if (dx * dx + dy * dy > 4 * kReach * kReach) continue;
+                const bool tooFar = dx * dx + dy * dy > 4 * kReach * kReach;
+                if (tooFar) continue;
+
                 tree::place(pose, other);
                 if (tree::collide(treeA, other)) return false;
             }
         }
     }
+
     return true;
 }
 
 std::optional<LatticeParams> findLattice(long iterations, std::mt19937_64 &rng) {
     std::uniform_real_distribution<double> unit(0.0, 1.0);
-    auto jiggle = [&](double step) {
-        return step * (2 * unit(rng) - 1);
-    };
+    auto jiggle = [&](double step) { return step * (2 * unit(rng) - 1); };
 
     // A random cell, roomy enough that tighten() only has to shrink it.
     LatticeParams p;
     for (int attempt = 0;; ++attempt) {
         if (attempt == 100) return std::nullopt;
+
         p.deg = 360 * unit(rng);
         p.a = 2 * kReach * (1 + unit(rng));
         p.b = 2 * kReach * (1 + unit(rng));
         p.h = unit(rng) - 0.5;
         p.s = unit(rng);
         p.t = unit(rng);
+
         if (tighten(p)) break;
     }
 
@@ -129,6 +142,7 @@ std::optional<LatticeParams> findLattice(long iterations, std::mt19937_64 &rng) 
     // search only ever compares cells that are as small as they can be.
     LatticeParams best = p;
     double current = areaPerTree(p);
+
     for (long it = 0; it < iterations; ++it) {
         const double progress = static_cast<double>(it) / iterations;
         const double step = 0.05 * std::pow(0.002, progress); // 0.05 down to 0.0001
@@ -137,25 +151,36 @@ std::optional<LatticeParams> findLattice(long iterations, std::mt19937_64 &rng) 
         LatticeParams q = p;
         const int kind = static_cast<int>(6 * unit(rng));
         const bool all = kind == 5;
-        if (kind == 0 || all) q.deg += 30 * jiggle(step);
-        if (kind == 1 || all) { // stretch one way, squash the other
+        const bool turn = kind == 0 || all;
+        const bool stretch = kind == 1 || all; // one way, squashing the other
+        const bool shiftRows = kind == 2 || all;
+        const bool moveBAlongU = kind == 3 || all;
+        const bool moveBAlongV = kind == 4 || all;
+
+        if (turn) q.deg += 30 * jiggle(step);
+        if (stretch) {
             const double r = std::exp(jiggle(step));
             q.a *= r;
             q.b /= r;
         }
-        if (kind == 2 || all) q.h = wrapHalf(q.h + jiggle(step));
-        if (kind == 3 || all) q.s = wrap01(q.s + jiggle(step));
-        if (kind == 4 || all) q.t = wrap01(q.t + jiggle(step));
+        if (shiftRows) q.h = wrapHalf(q.h + jiggle(step));
+        if (moveBAlongU) q.s = wrap01(q.s + jiggle(step));
+        if (moveBAlongV) q.t = wrap01(q.t + jiggle(step));
         if (!tighten(q)) continue;
 
         const double next = areaPerTree(q);
-        if (next < current || unit(rng) < std::exp((current - next) / temp)) {
+        const double worseBy = next - current;
+        const bool smaller = worseBy < 0;
+        const bool accept = smaller || unit(rng) < std::exp(-worseBy / temp);
+        if (accept) {
             p = q;
             current = next;
             if (next < areaPerTree(best)) best = q;
         }
     }
+
     best.deg = geometry::normalizeDeg(best.deg);
+
     return best;
 }
 
@@ -169,6 +194,7 @@ Layout cutLattice(const LatticeParams &p, int n) {
         Pose pose;
         Box box;
     };
+
     std::vector<Tree> trees;
 
     // Every tree that could lie inside a square of this side whose bottom edge is near row 0
@@ -177,10 +203,12 @@ Layout cutLattice(const LatticeParams &p, int n) {
         trees.clear();
         const int minJ = static_cast<int>(std::floor(-margin / p.b)) - 1;
         const int maxJ = static_cast<int>(std::ceil((side + margin) / p.b)) + 1;
+
         for (int j = minJ; j <= maxJ; ++j) {
             const double rowX = j * p.h * p.a;
             const int minI = static_cast<int>(std::floor((-margin - rowX) / p.a)) - 1;
             const int maxI = static_cast<int>(std::ceil((p.a + side + margin - rowX) / p.a)) + 1;
+
             for (int i = minI; i <= maxI; ++i) {
                 for (bool second : {false, true}) {
                     const Pose pose = latticePose(p, i, j, second);
@@ -191,8 +219,10 @@ Layout cutLattice(const LatticeParams &p, int n) {
     };
 
     auto inside = [](const Box &b, double x0, double y0, double side) {
-        return b.minX >= x0 - kTol && b.maxX <= x0 + side + kTol && b.minY >= y0 - kTol &&
-               b.maxY <= y0 + side + kTol;
+        const bool fitsX = b.minX >= x0 - kTol && b.maxX <= x0 + side + kTol;
+        const bool fitsY = b.minY >= y0 - kTol && b.maxY <= y0 + side + kTol;
+
+        return fitsX && fitsY;
     };
 
     struct Window {
@@ -208,25 +238,30 @@ Layout cutLattice(const LatticeParams &p, int n) {
     // band, reduced into [0, a).
     auto bestWindow = [&](double side) {
         Window best;
+
         for (double y0 : {boxA.minY, boxB.minY + d.y}) {
             std::vector<double> xs;
             for (const Tree &t : trees) {
-                if (t.box.minY >= y0 - kTol && t.box.maxY <= y0 + side + kTol) {
+                const bool fitsY = t.box.minY >= y0 - kTol && t.box.maxY <= y0 + side + kTol;
+                if (fitsY) {
                     xs.push_back(t.box.minX - p.a * std::floor(t.box.minX / p.a));
                 }
             }
+
             std::sort(xs.begin(), xs.end());
-            xs.erase(std::unique(xs.begin(), xs.end(),
-                                 [](double l, double r) { return r - l < kTol; }),
-                     xs.end());
+            auto nearlyEqual = [](double l, double r) { return r - l < kTol; };
+            xs.erase(std::unique(xs.begin(), xs.end(), nearlyEqual), xs.end());
+
             for (double x0 : xs) {
                 int count = 0;
                 for (const Tree &t : trees) {
                     if (inside(t.box, x0, y0, side)) ++count;
                 }
+
                 if (count > best.count) best = {x0, y0, count};
             }
         }
+
         return best;
     };
 
@@ -237,6 +272,7 @@ Layout cutLattice(const LatticeParams &p, int n) {
         hi *= 1.5;
         generate(hi);
     }
+
     double lo = 0;
     for (int it = 0; it < 45; ++it) {
         const double mid = (lo + hi) / 2;
@@ -252,10 +288,12 @@ Layout cutLattice(const LatticeParams &p, int n) {
     for (const Tree &t : trees) {
         if (inside(t.box, w.x0, w.y0, hi)) layout.add(t.pose);
     }
+
     // The square may hold a few more than n: drop the ones that shrink it most.
     while (static_cast<int>(layout.size()) > n) {
         layout.remove(layout.bestTreeToRemove());
     }
+
     return layout;
 }
 } // namespace packer::packing

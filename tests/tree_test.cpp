@@ -55,7 +55,8 @@ TEST(Tree, PartsCoverExactlyTheOutline) {
     for (int i = 0; i < 200000; ++i) {
         const Point p{x(rng), y(rng)};
         bool inAny = false;
-        for (const auto &part : t.parts) inAny = inAny || inPart(p, part);
+        for (const auto &part : t.parts)
+            inAny = inAny || inPart(p, part);
         const bool inOutline = geometry::pointInPolygon(p, tree::outline());
         EXPECT_EQ(inAny, inOutline) << p.x << ", " << p.y;
         inside += inOutline;

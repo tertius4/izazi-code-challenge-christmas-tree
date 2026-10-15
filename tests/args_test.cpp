@@ -52,9 +52,9 @@ TEST(ArgsTest, HelpFlags) {
 }
 
 TEST(ArgsTest, InvalidUsage) {
-    EXPECT_FALSE(parse({"--minutes"}).has_value());           // missing value
-    EXPECT_FALSE(parse({"--minutes", "ten"}).has_value());    // not a number
-    EXPECT_FALSE(parse({"--minutes", "10x"}).has_value());    // trailing junk
+    EXPECT_FALSE(parse({"--minutes"}).has_value());        // missing value
+    EXPECT_FALSE(parse({"--minutes", "ten"}).has_value()); // not a number
+    EXPECT_FALSE(parse({"--minutes", "10x"}).has_value()); // trailing junk
     EXPECT_FALSE(parse({"--minutes", "0"}).has_value());
     EXPECT_FALSE(parse({"--n", "30-13"}).has_value());
     EXPECT_FALSE(parse({"--n", "13-3x"}).has_value());

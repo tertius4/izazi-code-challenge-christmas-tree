@@ -8,6 +8,7 @@ static std::string escapeField(const std::string &field) {
     if (field.find_first_of(",\"\r\n") == std::string::npos) {
         return field;
     }
+
     std::string result = "\"";
     for (char c : field) {
         if (c == '"')
@@ -15,7 +16,9 @@ static std::string escapeField(const std::string &field) {
         else
             result += c;
     }
+
     result += "\"";
+
     return result;
 }
 
@@ -29,6 +32,7 @@ bool writeCsv(const std::string &path, const std::vector<std::vector<std::string
             if (i > 0) out << ",";
             out << escapeField(row[i]);
         }
+
         out << "\n";
     }
 

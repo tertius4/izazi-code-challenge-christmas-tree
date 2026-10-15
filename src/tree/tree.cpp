@@ -19,23 +19,28 @@ struct BasePart {
 
 BasePart makePart(std::initializer_list<Point> pts) {
     BasePart p;
-    for (const Point &q : pts) p.v[p.count++] = q;
+    for (const Point &q : pts) {
+        p.v[p.count++] = q;
+    }
+
     for (std::size_t k = 0; k < p.count; ++k) {
         const Point &a = p.v[k];
         const Point &b = p.v[(k + 1) % p.count];
         const double len = std::hypot(b.x - a.x, b.y - a.y);
         p.normal[k] = {(b.y - a.y) / len, -(b.x - a.x) / len}; // right of a->b: outward for CCW
     }
+
     return p;
 }
 
 const std::array<BasePart, kParts> &baseParts() {
     static const std::array<BasePart, kParts> parts = {
-        makePart({{0, 0.8}, {-0.125, 0.5}, {0.125, 0.5}}),               // top tier
-        makePart({{0, kMiddleApex}, {-0.2, 0.25}, {0.2, 0.25}}),        // middle tier
-        makePart({{0, 0.35}, {-0.35, 0}, {0.35, 0}}),                   // bottom tier
+        makePart({{0, 0.8}, {-0.125, 0.5}, {0.125, 0.5}}),                  // top tier
+        makePart({{0, kMiddleApex}, {-0.2, 0.25}, {0.2, 0.25}}),            // middle tier
+        makePart({{0, 0.35}, {-0.35, 0}, {0.35, 0}}),                       // bottom tier
         makePart({{-0.075, -0.2}, {0.075, -0.2}, {0.075, 0}, {-0.075, 0}}), // trunk
     };
+
     return parts;
 }
 
@@ -51,23 +56,27 @@ bool separatedAlong(const Part &a, const Part &b) {
         for (std::size_t j = 0; j < b.count; ++j) {
             bMin = std::min(bMin, n.x * b.v[j].x + n.y * b.v[j].y);
         }
+
         if (bMin > aMax + kGap) return true;
     }
+
     return false;
 }
 
 bool partsCollide(const Part &a, const Part &b) {
     if (!geometry::boxesOverlap(a.box, b.box)) return false;
+
     return !separatedAlong(a, b) && !separatedAlong(b, a);
 }
 } // namespace
 
 const Polygon &outline() {
     static const Polygon tree = {
-        {0, 0.8},     {0.125, 0.5},  {0.0625, 0.5},  {0.2, 0.25},    {0.1, 0.25},
-        {0.35, 0},    {0.075, 0},    {0.075, -0.2},  {-0.075, -0.2}, {-0.075, 0},
-        {-0.35, 0},   {-0.1, 0.25},  {-0.2, 0.25},   {-0.0625, 0.5}, {-0.125, 0.5},
+        {0, 0.8},   {0.125, 0.5}, {0.0625, 0.5}, {0.2, 0.25},    {0.1, 0.25},
+        {0.35, 0},  {0.075, 0},   {0.075, -0.2}, {-0.075, -0.2}, {-0.075, 0},
+        {-0.35, 0}, {-0.1, 0.25}, {-0.2, 0.25},  {-0.0625, 0.5}, {-0.125, 0.5},
     };
+
     return tree;
 }
 
@@ -75,6 +84,7 @@ void place(const Pose &pose, Placed &out) {
     const double rad = pose.deg * std::numbers::pi / 180.0;
     const double c = std::cos(rad);
     const double s = std::sin(rad);
+
     out.box = {INFINITY, INFINITY, -INFINITY, -INFINITY};
     const auto &base = baseParts();
     for (std::size_t p = 0; p < kParts; ++p) {
@@ -82,6 +92,7 @@ void place(const Pose &pose, Placed &out) {
         Part &to = out.parts[p];
         to.count = from.count;
         to.box = {INFINITY, INFINITY, -INFINITY, -INFINITY};
+
         for (std::size_t k = 0; k < from.count; ++k) {
             const Point &v = from.v[k];
             const Point &n = from.normal[k];
@@ -92,31 +103,37 @@ void place(const Pose &pose, Placed &out) {
             to.box.maxX = std::max(to.box.maxX, to.v[k].x);
             to.box.maxY = std::max(to.box.maxY, to.v[k].y);
         }
+
         out.box.minX = std::min(out.box.minX, to.box.minX);
         out.box.minY = std::min(out.box.minY, to.box.minY);
         out.box.maxX = std::max(out.box.maxX, to.box.maxX);
         out.box.maxY = std::max(out.box.maxY, to.box.maxY);
     }
+
     out.centre = {-kCentreY * s + pose.x, kCentreY * c + pose.y};
 }
 
 Placed place(const Pose &pose) {
     Placed out;
     place(pose, out);
+
     return out;
 }
 
 bool collide(const Placed &a, const Placed &b) {
     const double dx = a.centre.x - b.centre.x;
     const double dy = a.centre.y - b.centre.y;
-    if (dx * dx + dy * dy > 4 * kRadius * kRadius) return false;
+    const bool tooFar = dx * dx + dy * dy > 4 * kRadius * kRadius;
+    if (tooFar) return false;
     if (!geometry::boxesOverlap(a.box, b.box)) return false;
+
     for (const Part &pa : a.parts) {
         if (!geometry::boxesOverlap(pa.box, b.box)) continue;
         for (const Part &pb : b.parts) {
             if (partsCollide(pa, pb)) return true;
         }
     }
+
     return false;
 }
 } // namespace packer::tree

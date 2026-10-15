@@ -1,7 +1,7 @@
 #include "packing/annealer.h"
 #include "packing/improver.h"
-#include "packing/rotation.h"
 #include "packing/lattice.h"
+#include "packing/rotation.h"
 #include "packing/solver.h"
 #include "packing/starts.h"
 
@@ -25,12 +25,13 @@ TEST(Layout, GridAgreesWithBruteForce) {
     std::mt19937_64 rng(4);
     std::uniform_real_distribution<double> u(0.0, 1.0);
     Layout l;
-    for (int i = 0; i < 60; ++i) l.add({4 * u(rng), 4 * u(rng), 360 * u(rng)});
+    for (int i = 0; i < 60; ++i)
+        l.add({4 * u(rng), 4 * u(rng), 360 * u(rng)});
     for (int step = 0; step < 3000; ++step) {
         const std::size_t i = static_cast<std::size_t>(u(rng) * l.size());
         const double range = step % 100 == 0 ? 12 : 4;
-        l.setPose(i, {range * u(rng) - (range - 4) / 2, range * u(rng) - (range - 4) / 2,
-                      360 * u(rng)});
+        l.setPose(
+            i, {range * u(rng) - (range - 4) / 2, range * u(rng) - (range - 4) / 2, 360 * u(rng)});
         if (step % 500 == 0) l.remove(static_cast<std::size_t>(u(rng) * l.size()));
         for (std::size_t a = 0; a < l.size(); ++a) {
             bool expected = false;
@@ -49,7 +50,9 @@ TEST(Starts, RandomStartIsValid) {
     EXPECT_TRUE(l.isValid());
 }
 
-TEST(Starts, BestSingleBeatsUpright) { EXPECT_LE(bestSingle().side(), 1.0); }
+TEST(Starts, BestSingleBeatsUpright) {
+    EXPECT_LE(bestSingle().side(), 1.0);
+}
 
 // One short lattice search shared by the tests below.
 const LatticeParams &testLattice() {
@@ -140,9 +143,11 @@ TEST(Improver, KeepsLayoutsValidAndNeverWorse) {
     std::mt19937_64 rng(5);
     std::vector<Layout> best(9);
     best[1] = bestSingle();
-    for (int n = 2; n <= 8; ++n) best[n] = randomStart(n, rng);
+    for (int n = 2; n <= 8; ++n)
+        best[n] = randomStart(n, rng);
     std::vector<double> before(best.size());
-    for (std::size_t n = 1; n < best.size(); ++n) before[n] = best[n].side();
+    for (std::size_t n = 1; n < best.size(); ++n)
+        before[n] = best[n].side();
     std::vector<std::string> origins(best.size(), "start");
 
     ImproveConfig cfg;
@@ -158,11 +163,13 @@ TEST(Improver, KeepsLayoutsValidAndNeverWorse) {
             [&](const std::vector<Layout> &, const std::vector<std::string> &) { ++saves; });
 
     EXPECT_GE(saves, 1);
-    EXPECT_LT(totalScore(best), 0.9 * [&] {
-        double total = 0;
-        for (std::size_t n = 1; n < best.size(); ++n) total += before[n] * before[n] / n;
-        return total;
-    }()); // random starts are loose, so a short run must gain a lot
+    EXPECT_LT(
+        totalScore(best), 0.9 * [&] {
+            double total = 0;
+            for (std::size_t n = 1; n < best.size(); ++n)
+                total += before[n] * before[n] / n;
+            return total;
+        }()); // random starts are loose, so a short run must gain a lot
     for (std::size_t n = 1; n < best.size(); ++n) {
         EXPECT_EQ(best[n].size(), n);
         EXPECT_TRUE(best[n].isValid()) << "n=" << n;

@@ -10,12 +10,12 @@
 namespace packer::packing {
 // Settings for improving a set of best-known layouts over a time budget.
 struct ImproveConfig {
-    double minutes = 10;    // time budget
-    int threads = 0;        // 0: half the cores, so the computer stays usable
-    int minN = 1;           // only work on n in [minN, maxN]
+    double minutes = 10; // time budget
+    int threads = 0;     // 0: half the cores, so the computer stays usable
+    int minN = 1;        // only work on n in [minN, maxN]
     int maxN = 200;
     double saveSeconds = 120; // save this often, so an interrupted run loses little
-    unsigned seed = 0;      // 0: from the clock, so every run tries something new
+    unsigned seed = 0;        // 0: from the clock, so every run tries something new
     // Small n are worth fresh random starts, annealed hot and long.
     int smallMax = 30;
     long randomItersPerTree = 20000;
@@ -33,10 +33,10 @@ struct ImproveConfig {
 // from. Both are updated in place: a layout is only ever replaced by a valid, smaller one.
 // `save` is called every cfg.saveSeconds and at the end. Stops at the time budget or when
 // `stop` turns true (for example on Ctrl-C).
-using SaveFn = std::function<void(const std::vector<Layout> &best,
-                                  const std::vector<std::string> &origins)>;
-void improve(std::vector<Layout> &best, std::vector<std::string> &origins,
-             const ImproveConfig &cfg, std::atomic<bool> &stop, const SaveFn &save);
+using SaveFn =
+    std::function<void(const std::vector<Layout> &best, const std::vector<std::string> &origins)>;
+void improve(std::vector<Layout> &best, std::vector<std::string> &origins, const ImproveConfig &cfg,
+             std::atomic<bool> &stop, const SaveFn &save);
 
 // Kaggle score of a set of layouts: sum over n of side^2 / n.
 double totalScore(const std::vector<Layout> &layouts);

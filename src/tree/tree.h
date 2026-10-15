@@ -38,8 +38,8 @@ struct Part {
 // A tree placed at a pose, ready for collision checks.
 struct Placed {
     std::array<Part, kParts> parts{};
-    Box box{};          // around the whole tree
-    Point centre{};     // the turned and moved (0, kCentreY)
+    Box box{};      // around the whole tree
+    Point centre{}; // the turned and moved (0, kCentreY)
 };
 
 void place(const Pose &pose, Placed &out);

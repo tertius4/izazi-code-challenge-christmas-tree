@@ -27,6 +27,7 @@ std::vector<std::vector<std::string>> readCsv(const std::string &path) {
         row.push_back(std::move(field));
         field.clear();
     };
+
     auto endRow = [&] {
         if (fieldStarted) { // skip blank lines
             endField();
@@ -41,8 +42,9 @@ std::vector<std::vector<std::string>> readCsv(const std::string &path) {
 
         if (inQuotes) {
             if (c == '"') {
-                if (i + 1 < text.size() && text[i + 1] == '"') {
-                    field += '"'; // doubled quote -> literal quote
+                const bool doubledQuote = i + 1 < text.size() && text[i + 1] == '"';
+                if (doubledQuote) {
+                    field += '"'; // stands for one literal quote
                     ++i;
                 } else {
                     inQuotes = false;
@@ -75,6 +77,7 @@ std::vector<std::vector<std::string>> readCsv(const std::string &path) {
 
     if (inQuotes) throw std::runtime_error("Unclosed quote in " + path);
     endRow(); // last line without a trailing newline
+
     return rows;
 }
 
