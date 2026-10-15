@@ -11,7 +11,7 @@
 #include <sstream>
 #include <utility>
 
-#include "packing/compactor.h"
+#include "packing/rotation.h"
 #include "packing/lattice.h"
 #include "packing/starts.h"
 
@@ -37,16 +37,16 @@ bool sameCut(const LatticeParams &p, const LatticeParams &q) {
     return std::abs(fold(p.deg) - fold(q.deg)) < 0.5 && std::abs(p.a - q.a) < 1e-3 &&
            std::abs(p.b - q.b) < 1e-3;
 }
+} // namespace
 
-// Searches for dense lattices from random cells and keeps the densest distinct ones. The
-// searches end in different local optima, and the densest pattern is often not the one
+// The searches end in different local optima, and the densest pattern is often not the one
 // that cuts best into a square, so keeping several pays off.
-std::vector<LatticeParams> findLattices(const Polygon &shape, const SolverConfig &cfg) {
+std::vector<LatticeParams> findLattices(const SolverConfig &cfg) {
     std::vector<std::optional<LatticeParams>> found(cfg.latticeStarts);
 #pragma omp parallel for schedule(dynamic)
     for (int k = 0; k < cfg.latticeStarts; ++k) {
         std::mt19937_64 rng(cfg.seed * 1000003ULL + k);
-        found[k] = findLattice(shape, cfg.latticeIters, rng);
+        found[k] = findLattice(cfg.latticeIters, rng);
     }
 
     std::vector<LatticeParams> sorted;
@@ -71,6 +71,7 @@ std::vector<LatticeParams> findLattices(const Polygon &shape, const SolverConfig
     return lattices;
 }
 
+namespace {
 struct Start {
     Layout layout;
     std::string origin;
@@ -78,12 +79,11 @@ struct Start {
 };
 
 // The strategy bands: which starting layouts get annealed for this n, and how.
-std::vector<Start> startsFor(int n, const Polygon &shape,
-                             const std::vector<LatticeParams> &lattices, const SolverConfig &cfg,
-                             std::mt19937_64 &rng) {
+std::vector<Start> startsFor(int n, const std::vector<LatticeParams> &lattices,
+                             const SolverConfig &cfg, std::mt19937_64 &rng) {
     std::vector<Start> starts;
     if (n == 1) {
-        starts.push_back({bestSingle(shape), "exact rotation", {}});
+        starts.push_back({bestSingle(), "exact rotation", {}});
         starts.back().anneal.iterations = 0; // already the best single tree
         return starts;
     }
@@ -95,21 +95,24 @@ std::vector<Start> startsFor(int n, const Polygon &shape,
     random.startStep = cfg.randomStep;
     // A lattice cut is already dense: refine it, gently (cold) or with the usual heat.
     AnnealConfig lattice = cfg.anneal;
-    lattice.iterations = (n > cfg.mediumMax ? cfg.largeItersPerTree : cfg.itersPerTree) * n;
+    lattice.iterations = (n > cfg.mediumMax   ? cfg.largeItersPerTree
+                          : n > cfg.smallMax ? cfg.mediumItersPerTree
+                                             : cfg.itersPerTree) *
+                         n;
     AnnealConfig cold = lattice;
     cold.startTemp = cfg.latticeTemp;
     cold.startStep = cfg.latticeStep;
 
     std::vector<Start> grids;
     for (const LatticeParams &p : lattices) {
-        grids.push_back({cutLattice(shape, p, n), latticeName(p), lattice});
+        grids.push_back({cutLattice(p, n), latticeName(p), lattice});
     }
     std::sort(grids.begin(), grids.end(),
               [](const Start &a, const Start &b) { return a.layout.side() < b.layout.side(); });
 
     auto addRandom = [&](int count) {
         for (int r = 0; r < count; ++r) {
-            starts.push_back({randomStart(shape, n, rng), "random", random});
+            starts.push_back({randomStart(n, rng), "random", random});
         }
     };
 
@@ -137,53 +140,19 @@ std::vector<Start> startsFor(int n, const Polygon &shape,
     return starts;
 }
 
-// The best (n-1)-tree layout we can get by deleting one tree.
-Layout bestRemoval(const Layout &layout) {
-    Layout result = layout;
-    result.remove(layout.bestTreeToRemove());
-    return result;
-}
-
-// Whole-layout rotation and shrink-and-repair, both of which keep the layout valid.
-void polish(Layout &layout, const SolverConfig &cfg, std::mt19937_64 &rng) {
-    rotateWhole(layout);
-    if (cfg.repairIters > 0) {
-        compact(layout, rng, cfg.repairIters);
-        rotateWhole(layout);
-    }
-}
-
-// A short, cold anneal of a layout that is already good, then polish.
+// A short, cold anneal of a layout that is already good, then the best whole-layout turn.
 void refine(Layout &layout, const SolverConfig &cfg, std::mt19937_64 &rng) {
     AnnealConfig ac = cfg.anneal;
     ac.iterations = cfg.polishItersPerTree * static_cast<long>(layout.size());
     ac.startTemp = cfg.polishTemp;
     ac.startStep = cfg.polishStep;
     anneal(layout, ac, rng);
-    polish(layout, cfg, rng);
+    rotateWhole(layout);
 }
 
-// layout (n-1 trees) plus one more tree dropped into a free spot of the same square, or
-// nothing if no spot is found.
-std::optional<Layout> withExtraTree(const Layout &layout, std::mt19937_64 &rng) {
-    if (layout.size() == 0) return std::nullopt;
-    std::uniform_real_distribution<double> unit(0.0, 1.0);
-    const Box b = layout.bounds();
-    Layout out = layout;
-    out.add({0, 0, 0});
-    const std::size_t last = out.size() - 1;
-    for (int attempt = 0; attempt < 4000; ++attempt) {
-        out.setPose(last, {b.minX + unit(rng) * (b.maxX - b.minX),
-                           b.minY + unit(rng) * (b.maxY - b.minY), 360.0 * unit(rng)});
-        const Box &t = out.boxes[last];
-        if (t.minX < b.minX || t.maxX > b.maxX || t.minY < b.minY || t.maxY > b.maxY) continue;
-        if (!out.collidesWithOthers(last)) return out;
-    }
-    return std::nullopt;
-}
 } // namespace
 
-Solution solveAll(const Polygon &shape, const SolverConfig &cfg) {
+Solution solveAll(const SolverConfig &cfg) {
     const auto started = std::chrono::steady_clock::now();
     auto elapsed = [started] { // whole seconds since the start, for the progress log
         return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() -
@@ -192,11 +161,11 @@ Solution solveAll(const Polygon &shape, const SolverConfig &cfg) {
     };
 
     // Lattice search is the same for every n, so do it once up front.
-    const std::vector<LatticeParams> lattices = findLattices(shape, cfg);
+    const std::vector<LatticeParams> lattices = findLattices(cfg);
     std::cout << "[" << elapsed() << "s] lattices found" << std::endl;
 
     Solution sol;
-    sol.layouts.assign(cfg.maxN + 1, Layout(shape));
+    sol.layouts.assign(cfg.maxN + 1, Layout());
     sol.origins.assign(cfg.maxN + 1, "");
 
     // Each n is independent: spread them over all cores, slowest first so no core is left
@@ -211,7 +180,7 @@ Solution solveAll(const Polygon &shape, const SolverConfig &cfg) {
         std::mt19937_64 rng(cfg.seed + n);
 
         double bestSide = kInf;
-        for (Start &start : startsFor(n, shape, lattices, cfg, rng)) {
+        for (Start &start : startsFor(n, lattices, cfg, rng)) {
             if (!start.layout.isValid()) continue; // never anneal from a bad start
 
             anneal(start.layout, start.anneal, rng);
@@ -223,11 +192,11 @@ Solution solveAll(const Polygon &shape, const SolverConfig &cfg) {
         }
 
         if (n > 1 && static_cast<int>(sol.layouts[n].size()) == n) {
-            polish(sol.layouts[n], cfg, rng);
+            rotateWhole(sol.layouts[n]);
         }
 
         if (static_cast<int>(sol.layouts[n].size()) != n) { // fallback, should not happen
-            Layout layout = randomStart(shape, n, rng);
+            Layout layout = randomStart(n, rng);
             AnnealConfig ac = cfg.anneal;
             ac.iterations = cfg.randomItersPerTree * n;
             anneal(layout, ac, rng);
@@ -256,7 +225,7 @@ Solution solveAll(const Polygon &shape, const SolverConfig &cfg) {
 
             // Backward: build the (n-1)-tree layout, so it is judged against n-1.
             {
-                Layout candidate = bestRemoval(snapshot[n]);
+                Layout candidate = withoutTree(snapshot[n]);
                 const double target = snapshot[n - 1].side();
                 // Worth a polish if it is already close: polishing usually gains ~1%.
                 if (candidate.side() < target * 1.02) {

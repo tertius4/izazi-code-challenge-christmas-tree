@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <iomanip>
 #include <sstream>
+#include <stdexcept>
 
 namespace packer::io {
 namespace {
@@ -16,6 +17,11 @@ std::string formatValue(double v) {
     std::ostringstream out;
     out << std::fixed << std::setprecision(15) << v;
     return "s" + out.str();
+}
+
+double parseValue(const std::string &field) {
+    if (field.empty() || field.front() != 's') throw std::runtime_error("bad value: " + field);
+    return std::stod(field.substr(1));
 }
 } // namespace
 
@@ -34,5 +40,19 @@ std::vector<std::vector<std::string>> submissionTable(const std::vector<packing:
         }
     }
     return rows;
+}
+
+std::vector<packing::Layout> loadSubmission(const std::vector<std::vector<std::string>> &table) {
+    std::vector<packing::Layout> layouts(1);
+    for (std::size_t r = 1; r < table.size(); ++r) { // row 0 is the header
+        const auto &row = table[r];
+        if (row.size() < 4 || row[0].find('_') == std::string::npos) {
+            throw std::runtime_error("bad submission row " + std::to_string(r));
+        }
+        const std::size_t n = std::stoul(row[0].substr(0, row[0].find('_')));
+        while (layouts.size() <= n) layouts.emplace_back();
+        layouts[n].add({parseValue(row[1]), parseValue(row[2]), parseValue(row[3])});
+    }
+    return layouts;
 }
 } // namespace packer::io

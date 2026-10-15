@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "packing/annealer.h"
+#include "packing/lattice.h"
 #include "packing/layout.h"
 
 namespace packer::packing {
@@ -19,10 +20,11 @@ struct SolverConfig {
     double randomTemp = 0.05;
     double randomStep = 0.2;
     // Lattice cuts are already dense, so they are refined.
-    long itersPerTree = 2500;       // annealing moves per cut, per tree, for small and medium N
-    long largeItersPerTree = 40000; // the same for large N: the main use of the time budget
-    int mediumCuts = 4;             // how many of the smallest cuts are annealed for medium N...
-    int largeCuts = 2;              // ...and for large N
+    long itersPerTree = 2500;        // annealing moves per cut, per tree, for small N...
+    long mediumItersPerTree = 40000; // ...medium N...
+    long largeItersPerTree = 40000;  // ...and large N: the main use of the time budget
+    int mediumCuts = 4;              // how many of the smallest cuts are annealed for medium N...
+    int largeCuts = 2;               // ...and for large N
     // Annealing from a lattice cut can begin cold, so the dense pattern is refined, not melted.
     double latticeTemp = 1e-3;
     double latticeStep = 0.01;
@@ -31,10 +33,6 @@ struct SolverConfig {
     long latticeIters = 100000; // annealing moves per search
     int latticeKeep = 24;       // how many of the densest distinct lattices are cut for each N
     AnnealConfig anneal;
-    // Whole-layout rotation runs on every n's best layout, followed by shrink-and-repair if
-    // repairIters > 0 (repair moves per tree, per shrink attempt). It is off by default:
-    // after annealing it found nothing, and it was the slowest part of the passes.
-    long repairIters = 0;
     // Backward and forward passes: build n from n+1 minus a tree, or n-1 plus a tree, then
     // polish it with a short cold anneal. Repeats until nothing improves, up to `passes`.
     int passes = 10;
@@ -49,7 +47,11 @@ struct Solution {
     std::vector<std::string> origins; // which strategy produced layouts[n]
 };
 
-Solution solveAll(const Polygon &shape, const SolverConfig &cfg);
+Solution solveAll(const SolverConfig &cfg);
+
+// Searches for dense lattices from random cells and keeps the `latticeKeep` densest distinct
+// ones. solveAll runs this first; it is public for benchmarks.
+std::vector<LatticeParams> findLattices(const SolverConfig &cfg);
 
 // Kaggle score: sum over n of side^2 / n. Lower is better.
 double score(const Solution &solution);

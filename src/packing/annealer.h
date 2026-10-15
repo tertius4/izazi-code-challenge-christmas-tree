@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <random>
 
 #include "packing/layout.h"
@@ -16,6 +17,8 @@ struct AnnealConfig {
     double edgeShare = 0.05;     // push a tree on the edge of the square toward the centre
     double relocateShare = 0.05; // drop a tree on the edge somewhere inside the square
     double squeezeShare = 0.01;  // pull every tree toward the centre at once
+    // If set, the anneal stops early (keeping the best layout so far) once this turns true.
+    const std::atomic<bool> *stop = nullptr;
 };
 
 // Improves the layout in place. Never accepts a move that makes trees collide, and

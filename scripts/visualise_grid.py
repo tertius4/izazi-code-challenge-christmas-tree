@@ -19,9 +19,7 @@ from evaluator import (SCALE_FACTOR, calculate_bounding_box_side,  # noqa: E402
                        check_overlap, create_tree_polygon, load_submission)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_SUBMISSION = os.path.join(ROOT, 'data', 'output', 'results.csv')
-DEFAULT_OUTPUT = os.path.join(ROOT, 'data', 'output', 'grid.html')
-REPORT = os.path.join(ROOT, 'data', 'output', 'report.csv')
+DEFAULT_SUBMISSION = os.path.join(ROOT, 'data', 'current-best', 'results.csv')
 SCALE = float(SCALE_FACTOR)
 
 
@@ -178,12 +176,14 @@ addEventListener('keydown', e => {
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('submission', nargs='?', default=DEFAULT_SUBMISSION)
-    ap.add_argument('-o', '--output', default=DEFAULT_OUTPUT)
+    ap.add_argument('-o', '--output', help='default: grid.html next to the submission')
     ap.add_argument('--no-open', action='store_true', help="don't open the browser")
     args = ap.parse_args()
 
+    folder = os.path.dirname(os.path.abspath(args.submission))
+    args.output = args.output or os.path.join(folder, 'grid.html')
     df = load_submission(args.submission)
-    origins = load_origins(REPORT)
+    origins = load_origins(os.path.join(folder, 'report.csv'))
     cells = [build_cell(int(n), g, origins.get(int(n), ''))
              for n, g in df.groupby('n')]
 

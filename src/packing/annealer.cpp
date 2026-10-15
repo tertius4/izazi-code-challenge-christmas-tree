@@ -7,18 +7,49 @@
 
 namespace packer::packing {
 namespace {
-// Square side, plus a small reward for trees sitting near the centre. The pull opens up
+// How far a tree's box reaches from the centre (cx, cy), along x or y.
+double reach(const Box &t, double cx, double cy) {
+    return std::max({t.maxX - cx, cx - t.minX, t.maxY - cy, cy - t.minY});
+}
+
+// The square side, plus a small reward for trees sitting near the centre. The pull opens up
 // room inside so trees on the edge can move in later.
-double energy(const Layout &layout, double pullWeight, double &side) {
-    const Box b = layout.bounds();
-    const double cx = (b.minX + b.maxX) / 2;
-    const double cy = (b.minY + b.maxY) / 2;
-    double pull = 0;
-    for (const Box &t : layout.boxes) {
-        pull += std::max({t.maxX - cx, cx - t.minX, t.maxY - cy, cy - t.minY});
+struct Energy {
+    Box box{};        // around all trees
+    double pull = 0;  // sum of reach() over all trees
+    double side = 0;
+    double value = 0; // what the annealer minimises
+};
+
+Energy measure(const Layout &layout, double pullWeight) {
+    Energy e;
+    e.box = layout.bounds();
+    const double cx = (e.box.minX + e.box.maxX) / 2;
+    const double cy = (e.box.minY + e.box.maxY) / 2;
+    for (const Box &t : layout.boxes) e.pull += reach(t, cx, cy);
+    e.side = std::max(e.box.maxX - e.box.minX, e.box.maxY - e.box.minY);
+    e.value = e.side + pullWeight * e.pull / static_cast<double>(layout.size());
+    return e;
+}
+
+bool strictlyInside(const Box &t, const Box &b) {
+    return t.minX > b.minX && t.maxX < b.maxX && t.minY > b.minY && t.maxY < b.maxY;
+}
+
+// The energy after one tree's box changed from `before` to `after`. Most moves stay clear of
+// the edge, so the box and its centre stay put and only that tree's pull changes. Anything
+// else is measured from scratch.
+Energy afterMove(const Energy &e, const Box &before, const Box &after, const Layout &layout,
+                 double pullWeight) {
+    if (!strictlyInside(before, e.box) || !strictlyInside(after, e.box)) {
+        return measure(layout, pullWeight);
     }
-    side = std::max(b.maxX - b.minX, b.maxY - b.minY);
-    return side + pullWeight * pull / layout.size();
+    const double cx = (e.box.minX + e.box.maxX) / 2;
+    const double cy = (e.box.minY + e.box.maxY) / 2;
+    Energy next = e;
+    next.pull += reach(after, cx, cy) - reach(before, cx, cy);
+    next.value = next.side + pullWeight * next.pull / static_cast<double>(layout.size());
+    return next;
 }
 } // namespace
 
@@ -45,36 +76,38 @@ void anneal(Layout &layout, const AnnealConfig &cfg, std::mt19937_64 &rng) {
     const double edgeEnd = cfg.squeezeShare + cfg.edgeShare;
     const double relocateEnd = edgeEnd + cfg.relocateShare;
 
-    double currentSide = 0;
-    double current = energy(layout, cfg.pullWeight, currentSide);
-    // Only the poses are saved; the cached polygons are rebuilt once at the end.
+    Energy current = measure(layout, cfg.pullWeight);
+    // Only the poses are saved; the cached parts are rebuilt once at the end.
     std::vector<Pose> bestPoses = layout.poses;
-    double bestSide = currentSide;
+    double bestSide = current.side;
 
     for (long it = 0; it < cfg.iterations; ++it) {
+        if (cfg.stop && it % 4096 == 0 && cfg.stop->load(std::memory_order_relaxed)) break;
         // Progress 0 -> 1. Temperature and step size shrink geometrically.
         const double t = static_cast<double>(it) / cfg.iterations;
         const double temp = cfg.startTemp * std::pow(cfg.endTemp / cfg.startTemp, t);
         const double step = cfg.startStep * std::pow(cfg.endStep / cfg.startStep, t);
 
         undo.clear();
-        const Box b = layout.bounds();
+        const Box b = current.box;
         const double cx = (b.minX + b.maxX) / 2;
         const double cy = (b.minY + b.maxY) / 2;
         const double r = unit(rng);
         bool legal = false;
+        bool single = false; // a one-tree move: tree `i`, whose box was `before`
+        std::size_t i = 0;
+        Box before{};
 
         if (r < cfg.squeezeShare) {
             // Squeeze: pull every tree toward the centre at once, keeping the angles.
             const double side = std::max(b.maxX - b.minX, b.maxY - b.minY);
             const double f = 1 - step * unit(rng) / side;
-            for (std::size_t i = 0; i < layout.size(); ++i) {
-                const Pose p = layout.poses[i];
-                moveTree(i, {cx + (p.x - cx) * f, cy + (p.y - cy) * f, p.deg});
+            for (std::size_t k = 0; k < layout.size(); ++k) {
+                const Pose p = layout.poses[k];
+                moveTree(k, {cx + (p.x - cx) * f, cy + (p.y - cy) * f, p.deg});
             }
-            legal = layout.isValid();
+            legal = !layout.anyCollision();
         } else {
-            std::size_t i = 0;
             Pose moved;
             if (r < relocateEnd) {
                 // Only trees on the edge decide the side, so work on those.
@@ -110,8 +143,10 @@ void anneal(Layout &layout, const AnnealConfig &cfg, std::mt19937_64 &rng) {
                     moved.deg += 180;
                 }
             }
+            before = layout.boxes[i];
             moveTree(i, moved);
             legal = !layout.collidesWithOthers(i);
+            single = true;
         }
 
         if (!legal) { // a collision: undo right away
@@ -119,12 +154,14 @@ void anneal(Layout &layout, const AnnealConfig &cfg, std::mt19937_64 &rng) {
             continue;
         }
 
-        double nextSide = 0;
-        const double next = energy(layout, cfg.pullWeight, nextSide);
-        if (next <= current || unit(rng) < std::exp((current - next) / temp)) {
+        const Energy next = single
+                                ? afterMove(current, before, layout.boxes[i], layout, cfg.pullWeight)
+                                : measure(layout, cfg.pullWeight);
+        if (next.value <= current.value ||
+            unit(rng) < std::exp((current.value - next.value) / temp)) {
             current = next;
-            if (nextSide < bestSide) {
-                bestSide = nextSide;
+            if (next.side < bestSide) {
+                bestSide = next.side;
                 bestPoses = layout.poses;
             }
         } else {

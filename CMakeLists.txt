@@ -15,17 +15,18 @@ add_library(packer_lib
   src/cli/args.cpp
   src/io/csv_reader.cpp
   src/io/csv_writer.cpp
-  src/io/tree_loader.cpp
   src/io/submission.cpp
   src/io/report.cpp
   src/geometry/polygon.cpp
   src/geometry/collision.cpp
+  src/tree/tree.cpp
   src/packing/layout.cpp
   src/packing/starts.cpp
   src/packing/lattice.cpp
   src/packing/annealer.cpp
-  src/packing/compactor.cpp
+  src/packing/rotation.cpp
   src/packing/solver.cpp
+  src/packing/improver.cpp
 )
 
 target_include_directories(packer_lib PUBLIC src)
@@ -38,6 +39,10 @@ endif()
 add_executable(main src/main.cpp)
 target_link_libraries(main PRIVATE packer_lib)
 target_compile_options(main PRIVATE -Wall -Wextra)
+
+add_executable(bench src/bench.cpp)
+target_link_libraries(bench PRIVATE packer_lib)
+target_compile_options(bench PRIVATE -Wall -Wextra)
 
 if(PACKER_BUILD_TESTS)
   enable_testing()

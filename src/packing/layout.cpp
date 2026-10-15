@@ -1,52 +1,113 @@
 #include "packing/layout.h"
-#include "geometry/collision.h"
+
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace packer::packing {
+namespace {
+constexpr double kCell = 2 * tree::kRadius;
+constexpr int kMargin = 2; // spare cells around the trees when the grid is (re)built
+} // namespace
+
 void Layout::add(const Pose &pose) {
     poses.push_back(pose);
-    placed.push_back(geometry::transform(shape, pose));
-    boxes.push_back(geometry::boundingBox(placed.back()));
+    placed.push_back(tree::place(pose));
+    boxes.push_back(placed.back().box);
+    rebuildGrid();
 }
 
 void Layout::setPose(std::size_t i, const Pose &pose) {
     poses[i] = pose;
-    geometry::transformInto(shape, pose, placed[i]);
-    boxes[i] = geometry::boundingBox(placed[i]);
+    tree::place(pose, placed[i]);
+    boxes[i] = placed[i].box;
+
+    bool inside = false;
+    const int cell = cellAt(placed[i].centre.x, placed[i].centre.y, inside);
+    if (!inside) {
+        rebuildGrid();
+    } else if (cell != cellOf[i]) {
+        unlist(i);
+        cells[cell].push_back(static_cast<std::uint32_t>(i));
+        cellOf[i] = cell;
+    }
 }
 
 void Layout::remove(std::size_t i) {
-    poses.erase(poses.begin() + i);
-    placed.erase(placed.begin() + i);
-    boxes.erase(boxes.begin() + i);
+    poses.erase(poses.begin() + static_cast<std::ptrdiff_t>(i));
+    placed.erase(placed.begin() + static_cast<std::ptrdiff_t>(i));
+    boxes.erase(boxes.begin() + static_cast<std::ptrdiff_t>(i));
+    rebuildGrid(); // indices after i shifted
+}
+
+void Layout::rebuildGrid() {
+    cells.clear();
+    cellOf.assign(size(), 0);
+    if (poses.empty()) {
+        cols = rows = 0;
+        return;
+    }
+    double minX = INFINITY, minY = INFINITY, maxX = -INFINITY, maxY = -INFINITY;
+    for (const tree::Placed &t : placed) {
+        minX = std::min(minX, t.centre.x);
+        minY = std::min(minY, t.centre.y);
+        maxX = std::max(maxX, t.centre.x);
+        maxY = std::max(maxY, t.centre.y);
+    }
+    originX = minX - kMargin * kCell;
+    originY = minY - kMargin * kCell;
+    cols = static_cast<int>((maxX - minX) / kCell) + 1 + 2 * kMargin;
+    rows = static_cast<int>((maxY - minY) / kCell) + 1 + 2 * kMargin;
+    cells.assign(static_cast<std::size_t>(cols * rows), {});
+    for (std::size_t i = 0; i < size(); ++i) {
+        bool inside = false;
+        const int cell = cellAt(placed[i].centre.x, placed[i].centre.y, inside);
+        cells[cell].push_back(static_cast<std::uint32_t>(i));
+        cellOf[i] = cell;
+    }
+}
+
+int Layout::cellAt(double x, double y, bool &inside) const {
+    int cx = static_cast<int>(std::floor((x - originX) / kCell));
+    int cy = static_cast<int>(std::floor((y - originY) / kCell));
+    inside = cx >= 0 && cx < cols && cy >= 0 && cy < rows;
+    cx = std::clamp(cx, 0, cols - 1);
+    cy = std::clamp(cy, 0, rows - 1);
+    return cy * cols + cx;
+}
+
+void Layout::unlist(std::size_t i) {
+    auto &list = cells[cellOf[i]];
+    const auto it = std::find(list.begin(), list.end(), static_cast<std::uint32_t>(i));
+    *it = list.back();
+    list.pop_back();
 }
 
 bool Layout::collidesWithOthers(std::size_t i) const {
-    const Box &bi = boxes[i];
-    for (std::size_t j = 0; j < size(); ++j) {
-        // Cheap box test inline; most trees are far away.
-        if (j == i || !geometry::boxesOverlap(bi, boxes[j])) continue;
-        if (geometry::polygonsCollide(placed[i], bi, placed[j], boxes[j])) return true;
+    const tree::Placed &t = placed[i];
+    const int cx = cellOf[i] % cols;
+    const int cy = cellOf[i] / cols;
+    for (int y = std::max(cy - 1, 0); y <= std::min(cy + 1, rows - 1); ++y) {
+        for (int x = std::max(cx - 1, 0); x <= std::min(cx + 1, cols - 1); ++x) {
+            for (const std::uint32_t j : cells[y * cols + x]) {
+                if (j != i && tree::collide(t, placed[j])) return true;
+            }
+        }
     }
     return false;
 }
 
-std::vector<std::size_t> Layout::collidingWith(std::size_t i) const {
-    std::vector<std::size_t> hits;
-    const Box &bi = boxes[i];
-    for (std::size_t j = 0; j < size(); ++j) {
-        if (j == i || !geometry::boxesOverlap(bi, boxes[j])) continue;
-        if (geometry::polygonsCollide(placed[i], bi, placed[j], boxes[j])) hits.push_back(j);
+bool Layout::anyCollision() const {
+    for (std::size_t i = 0; i < size(); ++i) {
+        if (collidesWithOthers(i)) return true;
     }
-    return hits;
+    return false;
 }
 
 bool Layout::isValid() const {
     for (std::size_t i = 0; i < size(); ++i) {
         for (std::size_t j = i + 1; j < size(); ++j) {
-            if (!geometry::boxesOverlap(boxes[i], boxes[j])) continue;
-            if (geometry::polygonsCollide(placed[i], boxes[i], placed[j], boxes[j])) return false;
+            if (tree::collide(placed[i], placed[j])) return false;
         }
     }
     return true;

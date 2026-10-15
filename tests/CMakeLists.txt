@@ -16,6 +16,7 @@ add_executable(packer_tests
   geometry_test.cpp
   io_test.cpp
   packing_test.cpp
+  tree_test.cpp
 )
 target_link_libraries(packer_tests PRIVATE packer_lib GTest::gtest_main)
 target_compile_options(packer_tests PRIVATE -Wall -Wextra)

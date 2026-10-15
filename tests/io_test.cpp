@@ -1,6 +1,4 @@
-#include "io/csv_reader.h"
 #include "io/submission.h"
-#include "io/tree_loader.h"
 
 #include <stdexcept>
 #include <string>
@@ -10,20 +8,8 @@
 
 using namespace packer;
 
-TEST(TreeLoader, LoadsTreeCsv) {
-    const auto tree = io::loadPolygon(io::readCsv(TREE_CSV_PATH));
-    EXPECT_EQ(tree.size(), 15u);
-    // 3 tiers + trunk: 0.0375 + 0.065625 + 0.1125 + 0.03
-    EXPECT_NEAR(geometry::polygonArea(tree), 0.245625, 1e-12);
-}
-
-TEST(TreeLoader, RejectsTooFewVertices) {
-    EXPECT_THROW(io::loadPolygon({{"vertex", "x", "y"}, {"1", "0", "0"}}), std::runtime_error);
-}
-
 TEST(Submission, KaggleFormat) {
-    const auto tree = io::loadPolygon(io::readCsv(TREE_CSV_PATH));
-    std::vector<packing::Layout> layouts(3, packing::Layout(tree));
+    std::vector<packing::Layout> layouts(3);
     layouts[1].add({0, 0, 0});
     layouts[2].add({0, 0, 0});
     layouts[2].add({1, 0, -90});
@@ -34,4 +20,19 @@ TEST(Submission, KaggleFormat) {
     EXPECT_EQ(rows[3][0], "002_1");
     EXPECT_EQ(rows[3][3], "s270.000000000000000");
     EXPECT_EQ(rows[1][1].front(), 's');
+}
+
+TEST(Submission, LoadsWhatItWrites) {
+    std::vector<packing::Layout> layouts(3);
+    layouts[1].add({0, 0, 10});
+    layouts[2].add({-1, 0, 0});
+    layouts[2].add({1, 0.5, 90});
+    const auto loaded = io::loadSubmission(io::submissionTable(layouts));
+    ASSERT_EQ(loaded.size(), 3u);
+    ASSERT_EQ(loaded[2].size(), 2u);
+    // Written layouts are centred, so compare relative positions and angles.
+    EXPECT_NEAR(loaded[2].poses[1].x - loaded[2].poses[0].x, 2.0, 1e-12);
+    EXPECT_NEAR(loaded[2].poses[1].y - loaded[2].poses[0].y, 0.5, 1e-12);
+    EXPECT_NEAR(loaded[2].poses[1].deg, 90.0, 1e-12);
+    EXPECT_NEAR(loaded[1].side(), layouts[1].side(), 1e-12);
 }

@@ -1,7 +1,10 @@
 # Christmas Tree Solution
 
-A C++20 command-line tool.
-The total score is ±72.0. Design notes and thought process are in [APPROACH.md](APPROACH.md).
+A C++20 command-line tool that packs 1 to 200 Christmas trees into the smallest squares.
+Runs are incremental: each one starts from the best layouts found so far and only saves
+improvements, so the score keeps getting better the more you run it. The current score is the
+`total` row of `data/current-best/report.csv`. Design notes and thought process are in
+[APPROACH.md](APPROACH.md).
 
 ## Quick start
 
@@ -10,50 +13,65 @@ Requirements: a C++20 compiler (GCC 10+ / Clang 12+) and CMake 3.16+ (`sudo apt 
 ```bash
 ./run.sh            # no args: interactive menu
 ./run.sh build      # configure + build (Release) -> build/main
-./run.sh run        # pack data/input/tree.csv -> data/output/results.csv
+./run.sh run        # improve data/current-best for 10 minutes on half the cores
+./run.sh run --minutes 60 --threads 4   # longer, lighter on the machine
+./run.sh run --n 13-30                  # only work on some n
 ./run.sh test       # build + unit tests
-./run.sh evaluate   # validate and score the submission with shapely
+./run.sh evaluate   # validate and score data/current-best/results.csv with shapely
 ./run.sh visualise 10   # plot the 10-tree layout
-./run.sh visualise-all  # zoomable HTML grid of all 200 layouts (data/output/grid.html)
+./run.sh visualise-all  # zoomable HTML grid of all 200 layouts (grid.html next to results.csv)
+./run.sh bench improve anneal large   # quick check of one stage on a few n
+./run.sh bench patterns                # lattice search and the best cuts for a few large n
+./run.sh bench band 31                 # build n <= 31 from scratch (small and medium bands)
 ```
 
-A full run uses all cores and takes about 20-25 minutes (on a 16-thread laptop CPU); the log shows elapsed seconds per step. Run from the repository root (the default output path is relative).
+Run from the repository root (the default paths are relative). Every improvement is printed as
+it happens. Ctrl-C stops a run early and still saves. The run saves every two minutes anyway,
+writing to a temporary file first, so even a killed run never damages the store.
+
+If `data/current-best/results.csv` doesn't exist, the first run builds every layout from scratch
+(lattice cuts, random starts, neighbour passes; this takes a long time) and then improves it.
 
 ## Output
 
-- `data/output/results.csv`: `id,x,y,deg`, values prefixed with `s`.
-- `report.csv` next to it: per N, the square side, its share of the score and the strategy that produced it.
-
-The total score is printed at the end. Effort and strategy cutoffs live in `SolverConfig` ([src/packing/solver.h](src/packing/solver.h)), set in [src/main.cpp](src/main.cpp).
+`data/current-best/` (pass `--best DIR` to use another folder):
+- `results.csv`: `id,x,y,deg`, values prefixed with `s`.
+- `report.csv`: per N, the square side, its share of the score and how the layout was last
+  improved.
 
 ## How it works
 
-- **Geometry**: rotate/shift a polygon; collisions via edge intersection + point-in-polygon. Touching counts as a collision, so layouts keep a tiny gap.
-- **Starting layouts**: exact rotation scan for N=1, random non-overlapping layouts, and cuts from double lattices (two interlocking trees per cell, the second turned 180°). Each lattice search anneals a random cell (tilt, shape and offsets) and keeps it as small as it stays valid; many distinct lattices are kept, since the densest one is often not the one that cuts best into a square.
-- **Simulated annealing**: moves, rotates or flips one tree at a time, rejecting collisions, plus compaction moves on the trees that set the square's side.
-- **Strategy bands**: small N (≤12) use 100 long, hot random starts; medium N (≤30) the best lattice cuts plus random starts; large N a long cold anneal of the two best lattice cuts. Finally, neighbouring N help each other: N+1 minus a tree, or N-1 plus a tree, replaces N if smaller.
+- **The tree**: hard-coded, not read from a file. It is exactly the union of four convex parts
+  (the three tiers, each extended to a triangle, and the trunk). Two trees collide when any
+  pair of parts does, which a separating-axis test on 3–4 vertices decides quickly. Touching
+  counts as a collision, so layouts keep a tiny gap. Tests check this against the general
+  polygon test on a million random pairs and on pairs right at the point of contact.
+- **Layouts** keep a grid over the trees, so a collision check only looks at nearby trees.
+- **Simulated annealing**: moves, rotates or flips one tree at a time, rejecting collisions,
+  plus compaction moves on the trees that set the square's side.
+- **Improving** (`src/packing/improver.cpp`): threads keep picking an n (the n that has had the
+  least time so far, with more time for n that recently improved) and try one of:
+  re-annealing the best layout with a new seed (by far the most productive), n+1 trees minus
+  one, n-1 trees plus one, or for small n a fresh random start. A result replaces the best
+  only if it is valid and smaller. An improvement makes its neighbours n-1 and n+1 try again
+  soon.
+- **Building from scratch** (`src/packing/solver.cpp`, only without a store): an exact rotation
+  scan for N=1, random starts for small N, and cuts from double lattices (two interlocking trees
+  per cell, the second turned 180°) for larger N.
 
 ## Layout
 
 | Path | Contents |
 | --- | --- |
 | `src/cli`, `src/io` | argument parsing; CSV reading/writing, submission and report output |
-| `src/geometry` | polygon and collision code |
-| `src/packing` | layout, starts, lattice, annealer, solver |
+| `src/tree` | the tree: outline, convex parts, collision test |
+| `src/geometry` | general polygon code (used by tests, lattice cuts and rotation) |
+| `src/packing` | layout, starts, lattice, annealer, rotation, improver, solver |
+| `src/bench.cpp` | quick benchmarks on a few n, without a full run |
 | `tests/` | GoogleTest unit tests |
 | `scripts/evaluator.py` | independent validation, scoring and visualisation |
 | `scripts/visualise_grid.py` | zoomable HTML grid of all 200 layouts |
-| `data/` | input tree shape and generated output |
-
-## Input format
-
-`vertex,x,y,description`. The shape must be symmetric about the y-axis.
-
-```csv
-vertex,x,y,description
-1,0.0,0.8,Tip
-2,0.125,0.5,Right top tier outer
-```
+| `data/` | the tree outline (used by tests) and the best-known layouts |
 
 ## Tests
 

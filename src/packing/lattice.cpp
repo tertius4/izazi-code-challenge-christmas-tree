@@ -4,7 +4,7 @@
 #include <cmath>
 #include <vector>
 
-#include "geometry/collision.h"
+#include "tree/tree.h"
 
 namespace packer::packing {
 namespace {
@@ -17,31 +17,11 @@ Point offsetB(const LatticeParams &p) {
     return {p.s * p.a + p.t * p.h * p.a, p.t * p.b};
 }
 
-// Largest distance from the tree's origin to a vertex. The same at any rotation.
-double reachOf(const Polygon &shape) {
-    double reach = 0;
-    for (const Point &v : shape) {
-        reach = std::max(reach, std::hypot(v.x, v.y));
-    }
-    return reach;
-}
+// Largest distance from the tree's origin to a vertex (the tip), the same at any rotation.
+constexpr double kReach = 0.8;
 
 Box shifted(const Box &b, double dx, double dy) {
     return {b.minX + dx, b.minY + dy, b.maxX + dx, b.maxY + dy};
-}
-
-// True if `fixed` collides with `other` moved by (dx, dy). Builds the moved copy only when the
-// boxes overlap, which is rare.
-bool collidesShifted(const Polygon &fixed, const Box &fixedBox, const Polygon &other,
-                     const Box &otherBox, double dx, double dy) {
-    const Box movedBox = shifted(otherBox, dx, dy);
-    if (!geometry::boxesOverlap(fixedBox, movedBox)) return false;
-    Polygon moved = other;
-    for (Point &v : moved) {
-        v.x += dx;
-        v.y += dy;
-    }
-    return geometry::polygonsCollide(fixed, fixedBox, moved, movedBox);
 }
 
 double wrap01(double x) {
@@ -55,7 +35,7 @@ double wrapHalf(double x) {
 // Scales the cell (a and b together, so B keeps its place in the cell) down to about the
 // smallest size that is still valid. A colliding cell is first grown until it is valid.
 // Returns false if no valid size was found.
-bool tighten(const Polygon &shape, LatticeParams &p) {
+bool tighten(LatticeParams &p) {
     auto scaled = [&](double f) {
         LatticeParams q = p;
         q.a *= f;
@@ -63,14 +43,14 @@ bool tighten(const Polygon &shape, LatticeParams &p) {
         return q;
     };
     double hi = 1.0;
-    while (!latticeIsValid(shape, scaled(hi))) {
+    while (!latticeIsValid(scaled(hi))) {
         hi *= 1.1;
         if (hi > 20) return false; // B sits on top of A: no size works
     }
     double lo = hi * 0.7;
     for (int i = 0; i < 32; ++i) {
         const double mid = (lo + hi) / 2;
-        if (latticeIsValid(shape, scaled(mid))) {
+        if (latticeIsValid(scaled(mid))) {
             hi = mid;
         } else {
             lo = mid;
@@ -78,7 +58,7 @@ bool tighten(const Polygon &shape, LatticeParams &p) {
     }
     // Back off by a hair, so rounding far from the origin can never turn a touch into an overlap.
     const LatticeParams safer = scaled(hi * (1 + 1e-9));
-    p = latticeIsValid(shape, safer) ? safer : scaled(hi);
+    p = latticeIsValid(safer) ? safer : scaled(hi);
     return true;
 }
 } // namespace
@@ -95,38 +75,38 @@ Pose latticePose(const LatticeParams &p, int i, int j, bool second) {
     return {x + d.x, y + d.y, p.deg + 180};
 }
 
-bool latticeIsValid(const Polygon &shape, const LatticeParams &p) {
+bool latticeIsValid(const LatticeParams &p) {
     // The pattern repeats, so checking A(0,0) against its neighbours covers every pair:
     // A against A(i,j) covers all A-A pairs, A against B(i,j) all A-B pairs, and B-B pairs
     // are A-A pairs turned 180°.
-    const Polygon treeA = geometry::transform(shape, {0, 0, p.deg});
-    const Polygon treeB = geometry::transform(shape, {0, 0, p.deg + 180});
-    const Box boxA = geometry::boundingBox(treeA);
-    const Box boxB = geometry::boundingBox(treeB);
+    const tree::Placed treeA = tree::place({0, 0, p.deg});
     const Point d = offsetB(p);
+    tree::Placed other;
 
     // Two trees can only touch if their origins are within 2 reaches; B is a further |d| away.
-    const double range = 2 * reachOf(shape) + std::hypot(d.x, d.y);
+    const double range = 2 * kReach + std::hypot(d.x, d.y);
     const int maxJ = static_cast<int>(std::ceil(range / p.b)) + 1;
     for (int j = -maxJ; j <= maxJ; ++j) {
         const double rowX = j * p.h * p.a;
         const int minI = static_cast<int>(std::floor((-range - rowX) / p.a)) - 1;
         const int maxI = static_cast<int>(std::ceil((range - rowX) / p.a)) + 1;
         for (int i = minI; i <= maxI; ++i) {
-            const Pose other = latticePose(p, i, j, false);
-            if ((i != 0 || j != 0) &&
-                collidesShifted(treeA, boxA, treeA, boxA, other.x, other.y)) {
-                return false;
+            for (bool second : {false, true}) {
+                if (!second && i == 0 && j == 0) continue; // A(0,0) itself
+                const Pose pose = latticePose(p, i, j, second);
+                // Most neighbours are too far away to touch: skip placing them.
+                const double dx = pose.x;
+                const double dy = pose.y;
+                if (dx * dx + dy * dy > 4 * kReach * kReach) continue;
+                tree::place(pose, other);
+                if (tree::collide(treeA, other)) return false;
             }
-            const Pose otherB = latticePose(p, i, j, true);
-            if (collidesShifted(treeA, boxA, treeB, boxB, otherB.x, otherB.y)) return false;
         }
     }
     return true;
 }
 
-std::optional<LatticeParams> findLattice(const Polygon &shape, long iterations,
-                                         std::mt19937_64 &rng) {
+std::optional<LatticeParams> findLattice(long iterations, std::mt19937_64 &rng) {
     std::uniform_real_distribution<double> unit(0.0, 1.0);
     auto jiggle = [&](double step) {
         return step * (2 * unit(rng) - 1);
@@ -137,12 +117,12 @@ std::optional<LatticeParams> findLattice(const Polygon &shape, long iterations,
     for (int attempt = 0;; ++attempt) {
         if (attempt == 100) return std::nullopt;
         p.deg = 360 * unit(rng);
-        p.a = 2 * reachOf(shape) * (1 + unit(rng));
-        p.b = 2 * reachOf(shape) * (1 + unit(rng));
+        p.a = 2 * kReach * (1 + unit(rng));
+        p.b = 2 * kReach * (1 + unit(rng));
         p.h = unit(rng) - 0.5;
         p.s = unit(rng);
         p.t = unit(rng);
-        if (tighten(shape, p)) break;
+        if (tighten(p)) break;
     }
 
     // Simulated annealing on the shape of the cell. Every candidate is tightened, so the
@@ -166,7 +146,7 @@ std::optional<LatticeParams> findLattice(const Polygon &shape, long iterations,
         if (kind == 2 || all) q.h = wrapHalf(q.h + jiggle(step));
         if (kind == 3 || all) q.s = wrap01(q.s + jiggle(step));
         if (kind == 4 || all) q.t = wrap01(q.t + jiggle(step));
-        if (!tighten(shape, q)) continue;
+        if (!tighten(q)) continue;
 
         const double next = areaPerTree(q);
         if (next < current || unit(rng) < std::exp((current - next) / temp)) {
@@ -179,11 +159,11 @@ std::optional<LatticeParams> findLattice(const Polygon &shape, long iterations,
     return best;
 }
 
-Layout cutLattice(const Polygon &shape, const LatticeParams &p, int n) {
-    const Box boxA = geometry::boundingBox(geometry::transform(shape, {0, 0, p.deg}));
-    const Box boxB = geometry::boundingBox(geometry::transform(shape, {0, 0, p.deg + 180}));
+Layout cutLattice(const LatticeParams &p, int n) {
+    const Box boxA = tree::place({0, 0, p.deg}).box;
+    const Box boxB = tree::place({0, 0, p.deg + 180}).box;
     const Point d = offsetB(p);
-    const double margin = 2 * reachOf(shape) + std::hypot(d.x, d.y);
+    const double margin = 2 * kReach + std::hypot(d.x, d.y);
 
     struct Tree {
         Pose pose;
@@ -268,7 +248,7 @@ Layout cutLattice(const Polygon &shape, const LatticeParams &p, int n) {
     }
 
     const Window w = bestWindow(hi);
-    Layout layout(shape);
+    Layout layout;
     for (const Tree &t : trees) {
         if (inside(t.box, w.x0, w.y0, hi)) layout.add(t.pose);
     }
