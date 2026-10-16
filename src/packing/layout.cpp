@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numeric>
 
 namespace packer::packing {
 namespace {
@@ -92,25 +93,7 @@ void Layout::unlist(std::size_t i) {
 
 bool Layout::collidesWithOthers(std::size_t i) const {
     const tree::Placed &t = placed[i];
-    const int cx = cellOf[i] % cols;
-    const int cy = cellOf[i] / cols;
-
-    // Trees close enough to touch tree i sit in its cell or one of the eight around it.
-    const int firstRow = std::max(cy - 1, 0);
-    const int lastRow = std::min(cy + 1, rows - 1);
-    const int firstCol = std::max(cx - 1, 0);
-    const int lastCol = std::min(cx + 1, cols - 1);
-
-    for (int y = firstRow; y <= lastRow; ++y) {
-        for (int x = firstCol; x <= lastCol; ++x) {
-            for (const std::uint32_t j : cells[y * cols + x]) {
-                if (j == i) continue;
-                if (tree::collide(t, placed[j])) return true;
-            }
-        }
-    }
-
-    return false;
+    return anyNeighbour(i, [&](std::size_t j) { return tree::collide(t, placed[j]); });
 }
 
 bool Layout::anyCollision() const {
@@ -151,9 +134,12 @@ double Layout::side() const {
 }
 
 std::size_t Layout::bestTreeToRemove() const {
+    return removalOrder().front();
+}
+
+std::vector<std::size_t> Layout::removalOrder() const {
     constexpr double kInf = std::numeric_limits<double>::infinity();
-    std::size_t bestIndex = 0;
-    double bestSide = kInf;
+    std::vector<double> sideWithout(size());
 
     for (std::size_t skip = 0; skip < size(); ++skip) {
         Box b{kInf, kInf, -kInf, -kInf};
@@ -165,14 +151,15 @@ std::size_t Layout::bestTreeToRemove() const {
             b.maxY = std::max(b.maxY, boxes[j].maxY);
         }
 
-        const double side = std::max(b.maxX - b.minX, b.maxY - b.minY);
-        if (side < bestSide) {
-            bestSide = side;
-            bestIndex = skip;
-        }
+        sideWithout[skip] = std::max(b.maxX - b.minX, b.maxY - b.minY);
     }
 
-    return bestIndex;
+    std::vector<std::size_t> order(size());
+    std::iota(order.begin(), order.end(), std::size_t{0});
+    std::stable_sort(order.begin(), order.end(),
+                     [&](std::size_t a, std::size_t b) { return sideWithout[a] < sideWithout[b]; });
+
+    return order;
 }
 
 std::vector<std::size_t> Layout::edgeTrees() const {

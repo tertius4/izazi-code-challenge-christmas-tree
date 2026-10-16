@@ -3,6 +3,7 @@
 #include "packing/lattice.h"
 #include "packing/rotation.h"
 #include "packing/solver.h"
+#include "packing/squeezer.h"
 #include "packing/starts.h"
 
 #include <gtest/gtest.h>
@@ -41,6 +42,78 @@ TEST(Layout, GridAgreesWithBruteForce) {
             ASSERT_EQ(l.collidesWithOthers(a), expected) << "step " << step << " tree " << a;
         }
     }
+}
+
+TEST(Layout, RemovalOrderStartsWithBestTreeToRemove) {
+    std::mt19937_64 rng(7);
+    const Layout l = randomStart(15, rng);
+    const std::vector<std::size_t> order = l.removalOrder();
+    ASSERT_EQ(order.size(), l.size());
+    EXPECT_EQ(order.front(), l.bestTreeToRemove());
+    double last = 0;
+    for (const std::size_t i : order) {
+        Layout without = l;
+        without.remove(i);
+        EXPECT_GE(without.side(), last - 1e-12);
+        last = without.side();
+    }
+}
+
+TEST(Squeezer, FitsALooseLayoutIntoASmallerSquare) {
+    std::mt19937_64 rng(8);
+    const Layout loose = randomStart(10, rng);
+    const double target = 0.9 * loose.side();
+    SqueezeConfig cfg;
+    cfg.iterations = 200000;
+    const std::optional<Layout> l = squeeze(loose, target, cfg, rng);
+    ASSERT_TRUE(l.has_value());
+    EXPECT_EQ(l->size(), 10u);
+    EXPECT_TRUE(l->isValid());
+    EXPECT_LE(l->side(), target);
+}
+
+TEST(Squeezer, GivesUpOnAnImpossibleSquare) {
+    std::mt19937_64 rng(9);
+    SqueezeConfig cfg;
+    cfg.iterations = 20000;
+    Layout two;
+    two.add({0, 0, 0});
+    two.add({2, 0, 0});
+    // Two trees cannot share a square that only just fits one.
+    EXPECT_FALSE(squeeze(two, bestSingle().side(), cfg, rng).has_value());
+}
+
+TEST(Squeezer, RelaxFitsALooseLayoutIntoASmallerSquare) {
+    std::mt19937_64 rng(10);
+    const Layout loose = randomStart(30, rng);
+    const double target = 0.95 * loose.side();
+    SqueezeConfig cfg;
+    cfg.iterations = 1000;
+    cfg.relaxIters = 2000;
+    const std::optional<Layout> l = squeeze(loose, target, cfg, rng);
+    ASSERT_TRUE(l.has_value());
+    EXPECT_EQ(l->size(), 30u);
+    EXPECT_TRUE(l->isValid());
+    EXPECT_LE(l->side(), target);
+}
+
+TEST(Squeezer, ShakenLayoutSettlesBackIntoItsSquare) {
+    std::mt19937_64 rng(11);
+    const Layout l = randomStart(30, rng);
+    SqueezeConfig cfg;
+    cfg.iterations = 30000;
+    cfg.relaxIters = 2000;
+    int settled = 0;
+    for (int k = 0; k < 10; ++k) {
+        const Layout kicked = shake(l, 3, rng);
+        ASSERT_EQ(kicked.size(), l.size());
+        const std::optional<Layout> back = squeeze(kicked, l.side(), cfg, rng);
+        if (!back) continue;
+        ++settled;
+        EXPECT_TRUE(back->isValid());
+        EXPECT_LE(back->side(), l.side());
+    }
+    EXPECT_GT(settled, 5); // a loose layout has room for the kicked trees
 }
 
 TEST(Starts, RandomStartIsValid) {
@@ -157,6 +230,7 @@ TEST(Improver, KeepsLayoutsValidAndNeverWorse) {
     cfg.seed = 1;
     cfg.randomItersPerTree = 2000;
     cfg.refineItersPerTree = 2000;
+    cfg.squeezeItersPerTree = 2000;
     std::atomic<bool> stop{false};
     int saves = 0;
     improve(best, origins, cfg, stop,

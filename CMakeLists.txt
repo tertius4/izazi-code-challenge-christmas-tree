@@ -26,6 +26,7 @@ add_library(packer_lib
   src/packing/annealer.cpp
   src/packing/rotation.cpp
   src/packing/solver.cpp
+  src/packing/squeezer.cpp
   src/packing/improver.cpp
 )
 

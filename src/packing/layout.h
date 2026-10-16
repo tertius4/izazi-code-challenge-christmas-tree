@@ -28,6 +28,9 @@ struct Layout {
 
     // True if tree i overlaps or touches any other tree.
     bool collidesWithOthers(std::size_t i) const;
+    // Calls f(j) for every other tree j close enough to touch tree i, until f returns true.
+    // Returns whether some f(j) did.
+    template <class F> bool anyNeighbour(std::size_t i, F f) const;
     // True if any two trees collide. Uses the grid, so it is quick.
     bool anyCollision() const;
     // True if no pair of trees collides. Checks every pair without the grid, so it is an
@@ -41,6 +44,8 @@ struct Layout {
 
     // Index of the tree whose removal leaves the smallest square. Requires at least one tree.
     std::size_t bestTreeToRemove() const;
+    // Every tree's index, ordered by the square left after removing it, smallest first.
+    std::vector<std::size_t> removalOrder() const;
     // Trees whose box touches the edge of the box around all trees. Only these decide the side.
     std::vector<std::size_t> edgeTrees() const;
 
@@ -60,4 +65,25 @@ struct Layout {
     int cellAt(double x, double y, bool &inside) const;
     void unlist(std::size_t i);
 };
+
+template <class F> bool Layout::anyNeighbour(std::size_t i, F f) const {
+    const int cx = cellOf[i] % cols;
+    const int cy = cellOf[i] / cols;
+
+    // Trees close enough to touch tree i sit in its cell or one of the eight around it.
+    const int firstRow = cy > 0 ? cy - 1 : 0;
+    const int lastRow = cy + 1 < rows ? cy + 1 : rows - 1;
+    const int firstCol = cx > 0 ? cx - 1 : 0;
+    const int lastCol = cx + 1 < cols ? cx + 1 : cols - 1;
+
+    for (int y = firstRow; y <= lastRow; ++y) {
+        for (int x = firstCol; x <= lastCol; ++x) {
+            for (const std::uint32_t j : cells[y * cols + x]) {
+                if (j != i && f(static_cast<std::size_t>(j))) return true;
+            }
+        }
+    }
+
+    return false;
+}
 } // namespace packer::packing

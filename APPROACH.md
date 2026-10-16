@@ -42,7 +42,7 @@ I figured a CLI could come later.
 ### The Algorithm
 I set the AI to "plan" mode and went back and forth on what a good solution would look like. During this dialogue, I realised that this challenge came from a coding competition in 2025… lol.
 
-Once the code was implemented, I wanted to be sure that I understood it (and that anybody else could too). I spent about an hour reading through it and changing small things. Someone is going to look at all my dirty laundry, and I want it clean!
+Once the code was implemented, I wanted to be sure that I understood it (and that anybody else could understand it too). I spent about an hour reading through it and changing small things. Someone is going to look at all my dirty laundry, and I want it clean!
 
 How the final algorithm works is described in the [README](README.md#how-it-works).
 

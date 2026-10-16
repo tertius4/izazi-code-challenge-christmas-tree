@@ -46,12 +46,18 @@ If `data/current-best/results.csv` doesn't exist, the first run builds every lay
 - **Layouts** keep a grid over the trees, so a collision check only looks at nearby trees.
 - **Simulated annealing**: moves, rotates or flips one tree at a time, rejecting collisions,
   plus compaction moves on the trees that set the square's side.
-- **Improving** (`src/packing/improver.cpp`): threads keep picking an n (the n that has had the
-  least time so far, with more time for n that recently improved) and try one of:
-  re-annealing the best layout with a new seed (by far the most productive), n+1 trees minus
-  one, n-1 trees plus one, or for small n a fresh random start. A result replaces the best
-  only if it is valid and smaller. An improvement makes its neighbours n-1 and n+1 try again
-  soon.
+- **Improving** (`src/packing/improver.cpp`): passes go through n from the largest down to
+  the smallest, threads sharing the pass. Each visit of n tries, in order: n+1 trees minus each
+  of its best few trees to remove; n-1 trees plus one, squeezed; squeezing the best layout
+  until it fails twice in a row; a short re-anneal; and for small n, every other pass, a fresh
+  random start. A result replaces the best only if it is valid and smaller. An improvement
+  makes n+1 try "n plus a tree" right away.
+- **Squeezing** (`src/packing/squeezer.cpp`, by far the most productive): pull the trees into a
+  square slightly smaller than the best, letting them overlap, then anneal single-tree moves
+  that shrink the overlap (the penetration depth between the trees' convex parts) until none is
+  left. How much to shrink adapts per n: doubled after a success, halved after a failure.
+  Allowing overlap gives the search a slope to follow; the plain annealer, which rejects every
+  colliding move, finds no move that shrinks a tight packing.
 - **Building from scratch** (`src/packing/solver.cpp`, only without a store): an exact rotation
   scan for N=1, random starts for small N, and cuts from double lattices (two interlocking trees
   per cell, the second turned 180°) for larger N.

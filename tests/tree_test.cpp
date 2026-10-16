@@ -117,3 +117,69 @@ TEST(Tree, CollideAgreesNearContact) {
         }
     }
 }
+
+TEST(Tree, PenetrationPositiveExactlyOnCollision) {
+    std::mt19937_64 rng(6);
+    for (int i = 0; i < 200000; ++i) {
+        const auto a = tree::place(randomPose(rng, 0.6));
+        const auto b = tree::place(randomPose(rng, 0.6));
+        const double d = tree::penetration(a, b);
+        ASSERT_GE(d, 0) << "pair " << i;
+        ASSERT_EQ(d > 0, tree::collide(a, b)) << "pair " << i;
+        ASSERT_DOUBLE_EQ(d, tree::penetration(b, a)) << "pair " << i;
+    }
+}
+
+TEST(Tree, PenetrationGrowsAsTreesPushTogether) {
+    const auto a = tree::place({0, 0, 0});
+    double last = 0;
+    for (double x = 0.69; x > 0.4; x -= 0.05) { // bottom tiers side by side, sliding in
+        const double d = tree::penetration(a, tree::place({x, 0, 0}));
+        EXPECT_GT(d, last) << "x=" << x;
+        last = d;
+    }
+}
+
+TEST(Tree, OverlapSlopeMatchesFiniteDifferences) {
+    std::mt19937_64 rng(8);
+    constexpr double kMargin = 1e-3;
+    constexpr double kH = 1e-7;
+    int checked = 0;
+    for (int i = 0; i < 20000; ++i) {
+        const Pose pa = randomPose(rng, 0.6);
+        const auto b = tree::place(randomPose(rng, 0.6));
+        auto at = [&](double ddx, double ddy, double ddeg) {
+            const Pose p{pa.x + ddx, pa.y + ddy, pa.deg + ddeg};
+            return tree::overlap(tree::place(p), {p.x, p.y}, b, kMargin).depth;
+        };
+        const tree::Overlap o = tree::overlap(tree::place(pa), {pa.x, pa.y}, b, kMargin);
+        if (o.depth <= 0) continue;
+
+        // The depth has kinks where the shallowest axis changes: skip pairs right at one.
+        const double fx = (at(kH, 0, 0) - at(-kH, 0, 0)) / (2 * kH);
+        const double fy = (at(0, kH, 0) - at(0, -kH, 0)) / (2 * kH);
+        const double fdeg = (at(0, 0, kH) - at(0, 0, -kH)) / (2 * kH);
+        const bool smooth = std::abs(at(kH, 0, 0) + at(-kH, 0, 0) - 2 * o.depth) < 1e-9 &&
+                            std::abs(at(0, kH, 0) + at(0, -kH, 0) - 2 * o.depth) < 1e-9 &&
+                            std::abs(at(0, 0, kH) + at(0, 0, -kH) - 2 * o.depth) < 1e-9;
+        if (!smooth) continue;
+
+        ++checked;
+        ASSERT_NEAR(o.dx, fx, 1e-5) << "pair " << i;
+        ASSERT_NEAR(o.dy, fy, 1e-5) << "pair " << i;
+        ASSERT_NEAR(o.ddeg, fdeg, 1e-5) << "pair " << i;
+    }
+    EXPECT_GT(checked, 1000);
+}
+
+TEST(Tree, OverlapWithoutMarginAgreesWithPenetration) {
+    std::mt19937_64 rng(9);
+    for (int i = 0; i < 100000; ++i) {
+        const Pose pa = randomPose(rng, 0.6);
+        const auto a = tree::place(pa);
+        const auto b = tree::place(randomPose(rng, 0.6));
+        const double d = tree::penetration(a, b);
+        const double o = tree::overlap(a, {pa.x, pa.y}, b, 0).depth;
+        ASSERT_NEAR(o, d, 1e-9) << "pair " << i;
+    }
+}

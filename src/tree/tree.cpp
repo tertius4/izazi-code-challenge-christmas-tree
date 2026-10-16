@@ -63,6 +63,24 @@ bool separatedAlong(const Part &a, const Part &b) {
     return false;
 }
 
+// How far b reaches past a's edges: the smallest push along one of a's edge normals that
+// would clear b. Below -kGap means that normal separates them.
+double reachPast(const Part &a, const Part &b) {
+    double least = INFINITY;
+    for (std::size_t k = 0; k < a.count; ++k) {
+        const Point &n = a.normal[k];
+        const double aMax = n.x * a.v[k].x + n.y * a.v[k].y;
+        double bMin = INFINITY;
+        for (std::size_t j = 0; j < b.count; ++j) {
+            bMin = std::min(bMin, n.x * b.v[j].x + n.y * b.v[j].y);
+        }
+
+        least = std::min(least, aMax - bMin);
+    }
+
+    return least;
+}
+
 bool partsCollide(const Part &a, const Part &b) {
     if (!geometry::boxesOverlap(a.box, b.box)) return false;
 
@@ -135,5 +153,96 @@ bool collide(const Placed &a, const Placed &b) {
     }
 
     return false;
+}
+
+double penetration(const Placed &a, const Placed &b) {
+    constexpr double kGap = 1e-12; // as in separatedAlong: touching counts as overlap
+    const double dx = a.centre.x - b.centre.x;
+    const double dy = a.centre.y - b.centre.y;
+    const bool tooFar = dx * dx + dy * dy > 4 * kRadius * kRadius;
+    if (tooFar) return 0;
+    if (!geometry::boxesOverlap(a.box, b.box)) return 0;
+
+    double total = 0;
+    for (const Part &pa : a.parts) {
+        if (!geometry::boxesOverlap(pa.box, b.box)) continue;
+        for (const Part &pb : b.parts) {
+            if (!geometry::boxesOverlap(pa.box, pb.box)) continue;
+
+            const double depth = std::min(reachPast(pa, pb), reachPast(pb, pa));
+            // Exactly the parts that collide: no normal separates them by more than kGap.
+            if (depth >= -kGap) total += depth + 2 * kGap;
+        }
+    }
+
+    return total;
+}
+
+Overlap overlap(const Placed &a, Point origin, const Placed &b, double margin) {
+    Overlap out;
+    const double dx = a.centre.x - b.centre.x;
+    const double dy = a.centre.y - b.centre.y;
+    const double reach = 2 * kRadius + margin;
+    if (dx * dx + dy * dy > reach * reach) return out;
+
+    auto near = [margin](const Box &p, const Box &q) {
+        return p.minX <= q.maxX + margin && q.minX <= p.maxX + margin &&
+               p.minY <= q.maxY + margin && q.minY <= p.maxY + margin;
+    };
+    if (!near(a.box, b.box)) return out;
+
+    constexpr double kRadPerDeg = std::numbers::pi / 180.0;
+    auto perp = [](const Point &v) { return Point{-v.y, v.x}; }; // turned 90° counter-clockwise
+    auto dot = [](const Point &u, const Point &v) { return u.x * v.x + u.y * v.y; };
+    auto from = [&](const Point &v) { return Point{v.x - origin.x, v.y - origin.y}; };
+
+    for (const Part &pa : a.parts) {
+        if (!near(pa.box, b.box)) continue;
+        for (const Part &pb : b.parts) {
+            if (!near(pa.box, pb.box)) continue;
+
+            // The shallowest axis decides the depth, as in reachPast. Along one of a's normals
+            // n, a's edge and n turn with a, b's deepest vertex w stays: the depth moves with
+            // n and turns by perp(n)·(origin - w). Along one of b's normals m, a's deepest
+            // vertex u moves away from b's edge: by -m, and turns by -m·perp(u - origin).
+            double depth = INFINITY;
+            Point slope{};
+            double turn = 0;
+            for (std::size_t k = 0; k < pa.count; ++k) {
+                const Point &n = pa.normal[k];
+                std::size_t w = 0;
+                for (std::size_t j = 1; j < pb.count; ++j) {
+                    if (dot(n, pb.v[j]) < dot(n, pb.v[w])) w = j;
+                }
+                const double d = dot(n, pa.v[k]) - dot(n, pb.v[w]);
+                if (d < depth) {
+                    depth = d;
+                    slope = n;
+                    turn = dot(perp(n), Point{origin.x - pb.v[w].x, origin.y - pb.v[w].y});
+                }
+            }
+            for (std::size_t k = 0; k < pb.count; ++k) {
+                const Point &m = pb.normal[k];
+                std::size_t u = 0;
+                for (std::size_t j = 1; j < pa.count; ++j) {
+                    if (dot(m, pa.v[j]) < dot(m, pa.v[u])) u = j;
+                }
+                const double d = dot(m, pb.v[k]) - dot(m, pa.v[u]);
+                if (d < depth) {
+                    depth = d;
+                    slope = {-m.x, -m.y};
+                    turn = -dot(m, perp(from(pa.v[u])));
+                }
+            }
+
+            if (depth <= -margin) continue;
+            out.depth += depth + margin;
+            out.dx += slope.x;
+            out.dy += slope.y;
+            out.ddeg += turn * kRadPerDeg;
+        }
+    }
+
+    return out;
 }
 } // namespace packer::tree

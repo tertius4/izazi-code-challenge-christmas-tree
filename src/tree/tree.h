@@ -48,4 +48,21 @@ Placed place(const Pose &pose);
 // True if the trees overlap or touch. Touching counts, so every accepted layout keeps a real
 // gap that survives rounding in the output (the same rule as geometry::polygonsCollide).
 bool collide(const Placed &a, const Placed &b);
+
+// How deep the trees overlap: for each pair of colliding parts, the shortest distance one must
+// move to clear the other, summed over the pairs. Positive exactly when collide() is true, so
+// a layout with no penetration anywhere is valid.
+double penetration(const Placed &a, const Placed &b);
+
+// penetration() with a margin, and its slope. `depth` sums, over the part pairs closer than
+// `margin` to touching, how deep they overlap plus the margin; the other fields say how fast
+// that sum grows as tree a moves in x, in y, or turns (per degree) about `origin`, the x and y
+// of its pose. Tree b stays put. Zero exactly when every part pair is more than `margin` apart.
+struct Overlap {
+    double depth = 0;
+    double dx = 0;
+    double dy = 0;
+    double ddeg = 0;
+};
+Overlap overlap(const Placed &a, Point origin, const Placed &b, double margin);
 } // namespace packer::tree
