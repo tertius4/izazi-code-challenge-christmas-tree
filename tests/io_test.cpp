@@ -1,3 +1,4 @@
+#include "io/crystals.h"
 #include "io/submission.h"
 
 #include <stdexcept>
@@ -35,4 +36,16 @@ TEST(Submission, LoadsWhatItWrites) {
     EXPECT_NEAR(loaded[2].poses[1].y - loaded[2].poses[0].y, 0.5, 1e-12);
     EXPECT_NEAR(loaded[2].poses[1].deg, 90.0, 1e-12);
     EXPECT_NEAR(loaded[1].side(), layouts[1].side(), 1e-12);
+}
+
+TEST(Crystals, LoadsWhatItWrites) {
+    packing::Crystal a{{1.25, 0}, {0.3, 0.9}, {{0, 0, 10}, {0.5, 0.25, 190}}};
+    packing::Crystal b{{0.7, 0.1}, {-0.2, 1.1}, {{0, 0, 1.0 / 3}}};
+    const auto loaded = io::loadCrystals(io::crystalTable({a, b}));
+    ASSERT_EQ(loaded.size(), 2u);
+    ASSERT_EQ(loaded[0].cell.size(), 2u);
+    ASSERT_EQ(loaded[1].cell.size(), 1u);
+    EXPECT_EQ(loaded[0].v.x, 0.3);
+    EXPECT_EQ(loaded[0].cell[1].deg, 190);
+    EXPECT_EQ(loaded[1].cell[0].deg, 1.0 / 3); // full precision
 }

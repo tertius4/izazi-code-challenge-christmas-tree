@@ -1,12 +1,15 @@
+#include <algorithm>
 #include <atomic>
 #include <csignal>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "cli/args.h"
+#include "io/crystals.h"
 #include "io/csv_reader.h"
 #include "io/csv_writer.h"
 #include "io/report.h"
@@ -68,6 +71,22 @@ packer::packing::Solution load(const fs::path &dir) {
     return sol;
 }
 
+// The densest crystals, from crystals.csv in `dir`; searched for (which takes a few minutes)
+// and saved there the first time.
+std::vector<packer::packing::Crystal> crystals(const fs::path &dir, int threads) {
+    const fs::path path = dir / "crystals.csv";
+    if (fs::exists(path)) return packer::io::loadCrystals(packer::io::readCsv(path.string()));
+
+    std::cout << "No " << path.string() << " yet: searching for dense crystals first.\n";
+    std::vector<packer::packing::Crystal> found =
+        packer::packing::findCrystals(16, 100000, 4, threads, 1, &stopRequested);
+    if (!stopRequested && !found.empty()) {
+        fs::create_directories(dir);
+        writeAtomically(path, packer::io::crystalTable(found));
+    }
+    return found;
+}
+
 void save(const fs::path &dir, const std::vector<Layout> &layouts,
           const std::vector<std::string> &origins) {
     // reportTable checks every layout again before anything is written.
@@ -112,6 +131,10 @@ int main(int argc, char *argv[]) {
         cfg.maxN = args->maxN;
 
         std::signal(SIGINT, onInterrupt);
+        if (cfg.maxN >= cfg.crystalMinN) {
+            const unsigned half = std::max(1u, std::thread::hardware_concurrency() / 2);
+            cfg.crystals = crystals(dir, cfg.threads > 0 ? cfg.threads : static_cast<int>(half));
+        }
         packer::packing::improve(
             sol.layouts, sol.origins, cfg, stopRequested,
             [&](const std::vector<Layout> &layouts, const std::vector<std::string> &origins) {

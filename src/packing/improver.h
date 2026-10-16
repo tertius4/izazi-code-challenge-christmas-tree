@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "packing/crystal.h"
 #include "packing/layout.h"
 
 namespace packer::packing {
@@ -23,15 +24,51 @@ struct ImproveConfig {
     double squeezeMaxShrink = 1e-2;
     int squeezeFailures = 10; // a visit stops squeezing after this many failures in a row
     long squeezeRelaxIters = 2000; // all-trees relax steps per squeeze (see SqueezeConfig)
+    int squeezeGlsRounds = 2;      // penalty raises when relax is stuck (see SqueezeConfig)
+    double squeezeLineShare = 0.1; // share of best-of-several single-tree moves
+    // Border: squeeze with only the trees within this distance of the walls free to move.
+    double borderWidth = 1.0;
+    // Compress: make the side a variable (see compress()), then squeeze into where it got.
+    long compressIters = 1500;
+    int compressRounds = 4;
     // Shake: kick the current layout (swap, flip or move a few trees, see shake()), settle it
     // back into the best square with a short squeeze, and walk on from there; each settled
     // layout then gets one squeeze into a smaller square.
     int shakeTries = 20;          // per visit
     int shakeKicks = 3;           // up to this many trees changed per try
     long shakeItersPerTree = 200; // single-tree fallback when settling; relax does the rest
-    // Neighbours: n+1 minus one of its best few trees to remove, and n-1 plus a tree anywhere
-    // in its square, each squeezed into the best square so far.
+    // Neighbours: n+1 minus one of its best few trees to remove, and n-1 plus a tree (at the
+    // best spot or a random one), each squeezed into the best square so far.
     int removeCandidates = 3;
+    // Elites: per n, the few best distinct valid layouts seen, within this fraction of the
+    // best side. Crossover mixes the best with an elite (or a turned copy of itself, or a
+    // neighbour) and settles the child.
+    int eliteSize = 6;
+    double eliteSlack = 0.003;
+    int crossoverTries = 2; // per visit
+    // Crystal cuts, for n >= crystalMinN: cut the densest patterns into squares at many
+    // angles, compress, and squeeze down from there.
+    std::vector<Crystal> crystals;
+    int crystalMinN = 20;
+    int crystalAngles = 24;
+    double crystalSlack = 0.005; // squeeze down only from cuts within this of the best side
+    int crystalDescent = 8;     // squeezes when going down from a cut
+    // Dense starts, for n <= denseMax: random overlapping trees (half the time point-symmetric)
+    // in a roomy square, compressed and squeezed valid, then squeezed down if within
+    // denseSlack of the best side. Small n get more of them.
+    int denseMax = 40;
+    int denseStarts = 1;     // per visit...
+    int denseSmallMax = 10;  // ...times denseSmallBoost for n up to this
+    int denseSmallBoost = 6;
+    double denseSlack = 0.05;
+    int denseDescent = 12;
+    int denseGlsRounds = 4;
+    // Ruin and recreate (see ruinAndRecreate()): take out a patch of trees and put them back
+    // at the best spots, settle into the best square and walk on from there, like shaking but
+    // a whole patch at once. For n >= ruinMinN; the patch is 3 trees up to ruinShare of n.
+    int ruinTries = 6; // per visit
+    int ruinMinN = 8;
+    double ruinShare = 0.12;
     // Re-anneal the best layout cold, with a new seed.
     long refineItersPerTree = 4000;
     double refineTemp = 1e-3;
@@ -41,13 +78,24 @@ struct ImproveConfig {
     long randomItersPerTree = 20000;
     double randomTemp = 0.05;
     double randomStep = 0.2;
+    // Which n to visit next: this share of visits goes to the n with the best recent score
+    // gain per second (each n starts as if it had run banditPriorSeconds at the average rate),
+    // the rest to the plain sweep from maxN down to minN.
+    double banditShare = 0.5;
+    double banditPriorSeconds = 60;
+    // Which operators run: each try of an operator (other than the squeeze, which always runs)
+    // goes ahead with probability its score gain per second this run over the average of all
+    // of them, at least opMinChance. Each starts as if it had run opPriorSeconds at the average.
+    bool opBandit = true;
+    double opMinChance = 0.15;
+    double opPriorSeconds = 600;
 };
 
 // best[n] holds the best known n-tree layout (index 0 unused); origins[n] says where it came
 // from. Both are updated in place: a layout is only ever replaced by a valid, smaller one.
-// Passes go through n = maxN down to minN, each visit running every operator once.
-// `save` is called every cfg.saveSeconds and at the end. Stops at the time budget or when
-// `stop` turns true (for example on Ctrl-C).
+// Visits run every operator on one n; see ImproveConfig for the operators and how n are
+// picked. `save` is called every cfg.saveSeconds and at the end. Stops at the time budget or
+// when `stop` turns true (for example on Ctrl-C).
 using SaveFn =
     std::function<void(const std::vector<Layout> &best, const std::vector<std::string> &origins)>;
 void improve(std::vector<Layout> &best, std::vector<std::string> &origins, const ImproveConfig &cfg,

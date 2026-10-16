@@ -1,6 +1,9 @@
 #include "packing/annealer.h"
+#include "packing/crossover.h"
+#include "packing/crystal.h"
 #include "packing/improver.h"
 #include "packing/lattice.h"
+#include "packing/nfp.h"
 #include "packing/rotation.h"
 #include "packing/solver.h"
 #include "packing/squeezer.h"
@@ -175,6 +178,184 @@ TEST(Lattice, CutBeatsOldResultForLargeN) {
     EXPECT_LT(cutLattice(testLattice(), 200).side(), 9.1);
 }
 
+TEST(Crystal, DoubleLatticeIsTheSamePattern) {
+    const Crystal c = toCrystal(testLattice());
+    EXPECT_TRUE(crystalIsValid(c));
+    EXPECT_NEAR(areaPerTree(c), areaPerTree(testLattice()), 1e-12);
+    for (int i = -2; i <= 2; ++i) {
+        for (int j = -2; j <= 2; ++j) {
+            for (std::size_t k = 0; k < 2; ++k) {
+                const Pose a = crystalPose(c, i, j, k);
+                const Pose b = latticePose(testLattice(), i, j, k == 1);
+                EXPECT_NEAR(a.x, b.x, 1e-9);
+                EXPECT_NEAR(a.y, b.y, 1e-9);
+            }
+        }
+    }
+}
+
+TEST(Crystal, PeriodicCheckAgreesWithBruteForce) {
+    std::mt19937_64 rng(3);
+    const Crystal c = findCrystal(3, false, 3000, rng).value();
+    ASSERT_TRUE(crystalIsValid(c));
+    for (const Crystal &t : {c, turned(c, 37), doubled(c)}) {
+        EXPECT_TRUE(crystalIsValid(t));
+        Layout patch;
+        for (int i = 0; i < 6; ++i) {
+            for (int j = 0; j < 6; ++j) {
+                for (std::size_t k = 0; k < t.cell.size(); ++k) patch.add(crystalPose(t, i, j, k));
+            }
+        }
+        EXPECT_TRUE(patch.isValid());
+    }
+    EXPECT_NEAR(areaPerTree(doubled(c)), areaPerTree(c), 1e-12);
+    EXPECT_FALSE(crystalIsValid({{c.u.x * 0.9, c.u.y * 0.9}, {c.v.x * 0.9, c.v.y * 0.9}, c.cell}));
+}
+
+TEST(Crystal, CutsHoldExactlyNValidTreesAtAnyAngle) {
+    const Crystal c = toCrystal(testLattice());
+    std::mt19937_64 rng(2);
+    for (int n : {1, 7, 40, 150}) {
+        for (double deg : {0.0, 13.0, 61.5}) {
+            const Layout l = cutCrystal(turned(c, deg), n);
+            EXPECT_EQ(static_cast<int>(l.size()), n);
+            EXPECT_TRUE(l.isValid()) << "n=" << n << " deg=" << deg;
+        }
+        const auto [best, deg] = bestCrystalCut(c, n, 8, rng);
+        EXPECT_TRUE(best.isValid());
+        EXPECT_LE(best.side(), cutCrystal(turned(c, 13.0), n).side() + 0.5);
+    }
+}
+
+TEST(Squeezer, SymmetricSqueezeStaysSymmetric) {
+    std::mt19937_64 rng(12);
+    const Layout start = symmetricStart(16, 4.0, rng);
+    SqueezeConfig cfg;
+    cfg.iterations = 1; // relax only: the single-tree moves would break the symmetry
+    cfg.relaxIters = 5000;
+    cfg.glsRounds = 5;
+    cfg.symmetric = true;
+    const std::optional<Layout> l = squeeze(start, 3.2, cfg, rng);
+    ASSERT_TRUE(l.has_value());
+    EXPECT_TRUE(l->isValid());
+    EXPECT_LE(l->side(), 3.2);
+    const Box b = l->bounds();
+    const double cx = (b.minX + b.maxX) / 2, cy = (b.minY + b.maxY) / 2;
+    for (std::size_t i = 0; i < 8; ++i) {
+        EXPECT_NEAR(l->poses[i].x + l->poses[i + 8].x, 2 * cx, 1e-9);
+        EXPECT_NEAR(l->poses[i].y + l->poses[i + 8].y, 2 * cy, 1e-9);
+    }
+}
+
+TEST(Squeezer, OnlyMovableTreesMove) {
+    std::mt19937_64 rng(13);
+    const Layout cut = cutLattice(testLattice(), 60);
+    SqueezeConfig cfg;
+    cfg.iterations = 100000;
+    cfg.relaxIters = 2000;
+    cfg.movable = borderTrees(cut, 0.8);
+    const int fixed = static_cast<int>(std::count(cfg.movable.begin(), cfg.movable.end(), false));
+    ASSERT_GT(fixed, 0);
+    ASSERT_LT(fixed, 60);
+    const std::optional<Layout> l = squeeze(cut, cut.side() * 1.02, cfg, rng);
+    ASSERT_TRUE(l.has_value());
+    EXPECT_TRUE(l->isValid());
+    for (std::size_t i = 0; i < cut.size(); ++i) {
+        if (cfg.movable[i]) continue;
+        EXPECT_EQ(l->poses[i].x, cut.poses[i].x);
+        EXPECT_EQ(l->poses[i].y, cut.poses[i].y);
+        EXPECT_EQ(l->poses[i].deg, cut.poses[i].deg);
+    }
+}
+
+TEST(Squeezer, GuidedSearchUntanglesADenseStart) {
+    std::mt19937_64 rng(14);
+    const Layout start = denseStart(12, 2.0, rng);
+    SqueezeConfig cfg;
+    cfg.iterations = 50000;
+    cfg.relaxIters = 3000;
+    cfg.glsRounds = 10;
+    cfg.lineShare = 0.3;
+    const std::optional<Layout> l = squeeze(start, 2.6, cfg, rng);
+    ASSERT_TRUE(l.has_value());
+    EXPECT_TRUE(l->isValid());
+    EXPECT_LE(l->side(), 2.6);
+}
+
+TEST(Squeezer, CompressClosesTheWallsOnALooseLayout) {
+    std::mt19937_64 rng(15);
+    Layout l = randomStart(20, rng);
+    const double before = l.side();
+    const double side = compress(l, CompressConfig{});
+    EXPECT_LT(side, 0.9 * before);
+    SqueezeConfig cfg;
+    cfg.iterations = 20000;
+    cfg.relaxIters = 2000;
+    const std::optional<Layout> fitted = squeeze(l, side * 1.001, cfg, rng);
+    ASSERT_TRUE(fitted.has_value());
+    EXPECT_TRUE(fitted->isValid());
+}
+
+TEST(Nfp, CornersTouchWithoutOverlap) {
+    const packer::tree::Placed fixed = packer::tree::place({0, 0, 30});
+    int clear = 0, total = 0;
+    for (const auto &p : nfpCorners(fixed, 200, 1e-7)) {
+        ++total;
+        if (!packer::tree::collide(fixed, packer::tree::place({p.x, p.y, 200}))) ++clear;
+    }
+    // A corner of one pair's polygon may lie inside another pair's, but some are clear.
+    EXPECT_GT(total, 50);
+    EXPECT_GT(clear, 10);
+    // Pulled into its polygon, every corner overlaps: the polygons are where parts meet.
+    for (const auto &p : nfpCorners(fixed, 200, -1e-4)) {
+        EXPECT_TRUE(packer::tree::collide(fixed, packer::tree::place({p.x, p.y, 200})));
+    }
+}
+
+TEST(Nfp, BestInsertionFindsAFreeSpot) {
+    std::mt19937_64 rng(16);
+    Layout l = randomStart(10, rng);
+    const Box b = l.bounds();
+    l.add(bestInsertion(l, b, 4, rng));
+    EXPECT_TRUE(l.isValid());
+    const Box t = l.boxes.back();
+    EXPECT_GE(t.minX, b.minX);
+    EXPECT_LE(t.maxX, b.maxX);
+    EXPECT_GE(t.minY, b.minY);
+    EXPECT_LE(t.maxY, b.maxY);
+}
+
+TEST(Nfp, RuinAndRecreateKeepsTheTreesAndSettles) {
+    std::mt19937_64 rng(18);
+    const Layout l = randomStart(30, rng);
+    const Box b = l.bounds();
+    const double half = l.side() / 2;
+    const double cx = (b.minX + b.maxX) / 2, cy = (b.minY + b.maxY) / 2;
+    const Box square{cx - half, cy - half, cx + half, cy + half};
+    for (int k = 0; k < 3; ++k) {
+        const Layout r = ruinAndRecreate(l, square, 6, rng);
+        ASSERT_EQ(r.size(), l.size());
+        SqueezeConfig sc;
+        sc.iterations = 200000;
+        sc.relaxIters = 2000;
+        const std::optional<Layout> settled = squeeze(r, l.side() * 1.05, sc, rng);
+        ASSERT_TRUE(settled.has_value());
+        EXPECT_TRUE(settled->isValid());
+    }
+}
+
+TEST(Crossover, ChildHasNTrees) {
+    std::mt19937_64 rng(17);
+    const Layout a = randomStart(15, rng);
+    const Layout b = randomStart(15, rng);
+    const Layout c = randomStart(18, rng);
+    for (int k = 0; k < 5; ++k) {
+        EXPECT_EQ(crossover(a, b, 15, rng).size(), 15u);
+        EXPECT_EQ(crossover(a, c, 15, rng).size(), 15u);
+        EXPECT_EQ(crossover(c, a, 18, rng).size(), 18u);
+    }
+}
+
 TEST(Annealer, StaysValidAndNeverWorse) {
     Layout l = cutLattice(testLattice(), 10);
     const double before = l.side();
@@ -231,6 +412,8 @@ TEST(Improver, KeepsLayoutsValidAndNeverWorse) {
     cfg.randomItersPerTree = 2000;
     cfg.refineItersPerTree = 2000;
     cfg.squeezeItersPerTree = 2000;
+    cfg.crystals = {toCrystal(testLattice())};
+    cfg.crystalMinN = 5;
     std::atomic<bool> stop{false};
     int saves = 0;
     improve(best, origins, cfg, stop,

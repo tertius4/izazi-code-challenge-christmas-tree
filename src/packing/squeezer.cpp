@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <deque>
 #include <numbers>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -53,31 +55,85 @@ class BadSet {
     std::vector<std::size_t> at_;
 };
 
-// One unit of relax's angle variable turns the tree by 2 radians, which moves its tip (about
+// One unit of the angle variable turns the tree by 2 radians, which moves its tip (about
 // 0.5 from where it turns) about as far as one unit of x or y moves it.
 constexpr double kDegPerUnit = 2 * 180 / std::numbers::pi;
 
-// The overlap energy of the squeeze as a function of every tree's pose at once:
-// sum over pairs of overlap², plus sum over trees of how far they stick out², both counted
-// with relaxMargin so that zero energy leaves a real gap.
-class Relaxer {
+// The overlap energy as a function of every free tree's pose at once (and, when compressing,
+// of the square's side): sum over pairs of weight·overlap², plus sum over trees of how far
+// they stick out², all counted with a margin so that zero energy leaves a real gap.
+//
+// The variables come in blocks of three (x, y, angle), one per free tree. A tree either has
+// its own block, copies a block mirrored through the square's centre (symmetric mode), or has
+// none and stays put.
+class Energy {
   public:
-    Relaxer(Layout &l, const Box &square, double margin)
-        : l_(l), square_(square), margin_(margin) {}
+    struct Options {
+        double margin = 1e-8;
+        const std::vector<bool> *movable = nullptr; // null or empty: every tree moves
+        bool symmetric = false;
+        bool sideIsVariable = false; // compress: the energy is side + weight·penalty
+    };
+
+    Energy(Layout &l, const Box &square, const Options &o)
+        : l_(l), margin_(o.margin), sideIsVariable_(o.sideIsVariable),
+          cx_((square.minX + square.maxX) / 2), cy_((square.minY + square.maxY) / 2),
+          half_((square.maxX - square.minX) / 2) {
+        const std::size_t n = l.size();
+        block_.assign(n, -1);
+        mirrored_.assign(n, false);
+        const bool all = o.movable == nullptr || o.movable->empty();
+        auto moves = [&](std::size_t i) { return all || (*o.movable)[i]; };
+
+        const std::size_t pairs = o.symmetric ? n / 2 : 0;
+        for (std::size_t i = 0; i < pairs; ++i) {
+            block_[i] = block_[i + pairs] = static_cast<int>(primary_.size());
+            mirrored_[i + pairs] = true;
+            primary_.push_back(i);
+        }
+        for (std::size_t i = 2 * pairs; i < n; ++i) {
+            if (!moves(i)) continue;
+            block_[i] = static_cast<int>(primary_.size());
+            primary_.push_back(i);
+        }
+    }
+
+    std::size_t size() const {
+        return 3 * primary_.size() + (sideIsVariable_ ? 1 : 0);
+    }
+
+    double side() const {
+        return 2 * half_;
+    }
+
+    Box square() const {
+        return {cx_ - half_, cy_ - half_, cx_ + half_, cy_ + half_};
+    }
+
+    void setWeight(double w) {
+        weight_ = w;
+    }
 
     std::vector<double> get() const {
-        std::vector<double> z(3 * l_.size());
-        for (std::size_t i = 0; i < l_.size(); ++i) {
-            z[3 * i] = l_.poses[i].x;
-            z[3 * i + 1] = l_.poses[i].y;
-            z[3 * i + 2] = l_.poses[i].deg / kDegPerUnit;
+        std::vector<double> z(size());
+        for (std::size_t b = 0; b < primary_.size(); ++b) {
+            const Pose &p = l_.poses[primary_[b]];
+            z[3 * b] = p.x;
+            z[3 * b + 1] = p.y;
+            z[3 * b + 2] = p.deg / kDegPerUnit;
         }
+        if (sideIsVariable_) z.back() = 2 * half_;
         return z;
     }
 
     void set(const std::vector<double> &z) {
+        if (sideIsVariable_) half_ = z.back() / 2;
         for (std::size_t i = 0; i < l_.size(); ++i) {
-            l_.setPose(i, {z[3 * i], z[3 * i + 1], z[3 * i + 2] * kDegPerUnit});
+            const int b = block_[i];
+            if (b < 0) continue;
+            const double x = z[3 * b], y = z[3 * b + 1], deg = z[3 * b + 2] * kDegPerUnit;
+            l_.setPose(i, mirrored_[i] ? Pose{2 * cx_ - x, 2 * cy_ - y, deg + 180}
+                                       : Pose{x, y, deg});
         }
     }
 
@@ -85,52 +141,123 @@ class Relaxer {
     // and inside the square (by collide(), not the margin).
     double eval(std::vector<double> &g, bool &clear) const {
         const std::size_t n = l_.size();
-        g.assign(3 * n, 0.0);
+        const Box sq = square();
+        perTree_.assign(3 * n, 0.0);
         clear = true;
-        double energy = 0;
+        double penalty = 0;
+        double sideSlope = 0; // d(penalty)/d(side)
 
         for (std::size_t i = 0; i < n; ++i) {
             const Point o{l_.poses[i].x, l_.poses[i].y};
-            double *gi = &g[3 * i];
+            double *gi = &perTree_[3 * i];
 
-            if (outside(l_.boxes[i], square_) > 0) clear = false;
-            const Wall w = wall(i, o);
+            if (outside(l_.boxes[i], sq) > 0) clear = false;
+            const Wall w = wall(i, o, sq);
             if (w.depth > 0) {
-                energy += w.depth * w.depth;
+                penalty += w.depth * w.depth;
                 gi[0] += 2 * w.depth * w.dx;
                 gi[1] += 2 * w.depth * w.dy;
                 gi[2] += 2 * w.depth * w.ddeg * kDegPerUnit;
+                sideSlope += 2 * w.depth * (-0.5 * w.sides); // each wall moves out by side/2
             }
 
             l_.anyNeighbour(i, [&](std::size_t j) {
+                if (block_[i] < 0 && block_[j] < 0) return false; // neither moves
                 const tree::Overlap ov = tree::overlap(l_.placed[i], o, l_.placed[j], margin_);
                 if (ov.depth <= 0) return false;
-                if (j > i) energy += ov.depth * ov.depth;
+                const double w = pairWeight(i, j);
+                if (j > i) penalty += w * ov.depth * ov.depth;
                 // d(depth²)/d(pose of i): each pair is visited once from each side.
-                gi[0] += 2 * ov.depth * ov.dx;
-                gi[1] += 2 * ov.depth * ov.dy;
-                gi[2] += 2 * ov.depth * ov.ddeg * kDegPerUnit;
+                gi[0] += 2 * w * ov.depth * ov.dx;
+                gi[1] += 2 * w * ov.depth * ov.dy;
+                gi[2] += 2 * w * ov.depth * ov.ddeg * kDegPerUnit;
                 if (clear && tree::collide(l_.placed[i], l_.placed[j])) clear = false;
                 return false;
             });
         }
 
-        return energy;
+        // Fold each tree's slope into its block: a mirrored tree moves against its block's x
+        // and y, and turns with it.
+        const double scale = sideIsVariable_ ? weight_ : 1.0;
+        g.assign(size(), 0.0);
+        for (std::size_t i = 0; i < n; ++i) {
+            const int b = block_[i];
+            if (b < 0) continue;
+            const double sign = mirrored_[i] ? -1.0 : 1.0;
+            g[3 * b] += scale * sign * perTree_[3 * i];
+            g[3 * b + 1] += scale * sign * perTree_[3 * i + 1];
+            g[3 * b + 2] += scale * perTree_[3 * i + 2];
+        }
+
+        if (!sideIsVariable_) return penalty;
+        g.back() = 1 + weight_ * sideSlope;
+        return 2 * half_ + weight_ * penalty;
+    }
+
+    // Guided local search: raise the weight of every pair that still overlaps, the deepest by
+    // 1 and the others in proportion. Returns false if nothing overlaps.
+    bool raiseWeights() {
+        std::vector<std::pair<std::uint64_t, double>> hits;
+        double deepest = 0;
+        for (std::size_t i = 0; i < l_.size(); ++i) {
+            const Point o{l_.poses[i].x, l_.poses[i].y};
+            l_.anyNeighbour(i, [&](std::size_t j) {
+                if (j < i) return false;
+                const double d = tree::overlap(l_.placed[i], o, l_.placed[j], margin_).depth;
+                if (d > 0) {
+                    hits.push_back({key(i, j), d});
+                    deepest = std::max(deepest, d);
+                }
+                return false;
+            });
+        }
+
+        for (const auto &[k, d] : hits) {
+            auto it = weights_.try_emplace(k, 1.0).first;
+            it->second += d / deepest;
+        }
+
+        return !hits.empty();
     }
 
   private:
     Layout &l_;
-    const Box square_;
     const double margin_;
+    const bool sideIsVariable_;
+    const double cx_, cy_;
+    double half_;
+    double weight_ = 1;
+    std::vector<int> block_;
+    std::vector<bool> mirrored_;
+    std::vector<std::size_t> primary_; // the tree each block places as it is
+    std::unordered_map<std::uint64_t, double> weights_; // raised pair weights; the rest are 1
+    mutable std::vector<double> perTree_;
+
+    std::uint64_t key(std::size_t i, std::size_t j) const {
+        if (j < i) std::swap(i, j);
+        return static_cast<std::uint64_t>(i) * l_.size() + j;
+    }
+
+    double pairWeight(std::size_t i, std::size_t j) const {
+        if (weights_.empty()) return 1;
+        const auto it = weights_.find(key(i, j));
+        return it == weights_.end() ? 1 : it->second;
+    }
 
     // How far tree i sticks out of the square shrunk by the margin, summed over the sides,
-    // and its slope; the same shape as tree::Overlap.
-    using Wall = tree::Overlap;
-    Wall wall(std::size_t i, const Point &o) const {
+    // its slope, and how many sides it sticks out of.
+    struct Wall {
+        double depth = 0;
+        double dx = 0;
+        double dy = 0;
+        double ddeg = 0;
+        int sides = 0;
+    };
+    Wall wall(std::size_t i, const Point &o, const Box &sq) const {
         Wall w;
         const Box &b = l_.boxes[i];
-        const double minX = square_.minX + margin_, maxX = square_.maxX - margin_;
-        const double minY = square_.minY + margin_, maxY = square_.maxY - margin_;
+        const double minX = sq.minX + margin_, maxX = sq.maxX - margin_;
+        const double minY = sq.minY + margin_, maxY = sq.maxY - margin_;
         if (b.minX >= minX && b.maxX <= maxX && b.minY >= minY && b.maxY <= maxY) return w;
 
         // The vertex that reaches furthest each way; turning moves it by perp(v - o).
@@ -151,21 +278,25 @@ class Relaxer {
             w.depth += minX - b.minX;
             w.dx -= 1;
             w.ddeg += (loX.y - o.y) * kRadPerDeg; // d(v.x)/dθ = -(v.y - o.y)
+            ++w.sides;
         }
         if (b.maxX > maxX) {
             w.depth += b.maxX - maxX;
             w.dx += 1;
             w.ddeg -= (hiX.y - o.y) * kRadPerDeg;
+            ++w.sides;
         }
         if (b.minY < minY) {
             w.depth += minY - b.minY;
             w.dy -= 1;
             w.ddeg -= (loY.x - o.x) * kRadPerDeg; // d(v.y)/dθ = v.x - o.x
+            ++w.sides;
         }
         if (b.maxY > maxY) {
             w.depth += b.maxY - maxY;
             w.dy += 1;
             w.ddeg += (hiY.x - o.x) * kRadPerDeg;
+            ++w.sides;
         }
 
         return w;
@@ -180,17 +311,19 @@ double dot(const std::vector<double> &u, const std::vector<double> &v) {
     return sum;
 }
 
-// Moves every tree at once down the slope of the overlap energy (L-BFGS with a backtracking
-// line search) until the layout is valid inside the square, or it gets stuck. Returns whether
-// the layout came out valid; either way `l` holds the lowest-energy poses found.
-bool relax(Layout &l, const Box &square, const SqueezeConfig &cfg) {
+// L-BFGS with a backtracking line search on the energy. With `untilClear`, stops as soon as
+// the layout is valid inside the square and returns true; otherwise runs until stuck or out
+// of iterations. When stuck with `glsRounds` left, raises the weights of the overlapping
+// pairs and carries on. Either way the layout holds the lowest-energy poses found.
+bool minimise(Energy &e, long iterations, int glsRounds, bool untilClear,
+              const std::atomic<bool> *stop) {
     constexpr std::size_t kMemory = 8;
-    Relaxer r(l, square, cfg.relaxMargin);
+    constexpr long kCheckEvery = 100; // how often to look for a stall worth a GLS round
 
-    std::vector<double> z = r.get(), g, zNext, gNext, d;
+    std::vector<double> z = e.get(), g, zNext, gNext, d;
     bool clear = false;
-    double energy = r.eval(g, clear);
-    if (clear) return true;
+    double energy = e.eval(g, clear);
+    if (untilClear && clear) return true;
 
     struct Pair {
         std::vector<double> s, y;
@@ -198,9 +331,26 @@ bool relax(Layout &l, const Box &square, const SqueezeConfig &cfg) {
     };
     std::deque<Pair> memory;
     std::vector<double> alpha(kMemory);
+    double checkpoint = energy;
 
-    for (long it = 0; it < cfg.relaxIters; ++it) {
-        if (cfg.stop && cfg.stop->load(std::memory_order_relaxed)) break;
+    // Stuck: either raise the weights and go on, or give up.
+    auto guide = [&]() {
+        if (glsRounds <= 0 || !e.raiseWeights()) return false;
+        --glsRounds;
+        energy = e.eval(g, clear);
+        checkpoint = energy;
+        memory.clear();
+        return true;
+    };
+
+    for (long it = 0; it < iterations; ++it) {
+        if (stop && stop->load(std::memory_order_relaxed)) break;
+
+        if (it > 0 && it % kCheckEvery == 0) {
+            const bool stalled = energy > 0.99 * checkpoint;
+            checkpoint = energy;
+            if (stalled && untilClear) guide();
+        }
 
         // Direction: -H·g by the two-loop recursion.
         d = g;
@@ -235,11 +385,14 @@ bool relax(Layout &l, const Box &square, const SqueezeConfig &cfg) {
             for (double &v : d) v *= kMaxStep / longest;
         }
 
-        double slope = dot(g, d);
+        const double slope = dot(g, d);
         if (!(slope < 0)) {
-            if (memory.empty()) break; // flat: nothing left to follow
-            memory.clear();
-            continue;
+            if (!memory.empty()) {
+                memory.clear();
+                continue;
+            }
+            if (guide()) continue;
+            break; // flat: nothing left to follow
         }
 
         // Backtrack until the energy drops enough.
@@ -250,19 +403,22 @@ bool relax(Layout &l, const Box &square, const SqueezeConfig &cfg) {
         zNext.resize(z.size());
         for (int tries = 0; tries < 40; ++tries, t /= 2) {
             for (std::size_t q = 0; q < z.size(); ++q) zNext[q] = z[q] + t * d[q];
-            r.set(zNext);
-            eNext = r.eval(gNext, clearNext);
-            if (eNext <= energy + 1e-4 * t * slope || clearNext) {
+            e.set(zNext);
+            eNext = e.eval(gNext, clearNext);
+            if (eNext <= energy + 1e-4 * t * slope || (untilClear && clearNext)) {
                 moved = true;
                 break;
             }
         }
 
         if (!moved) {
-            r.set(z);
-            if (memory.empty()) return false; // stuck at a local minimum with overlap left
-            memory.clear();
-            continue;
+            e.set(z);
+            if (!memory.empty()) {
+                memory.clear();
+                continue;
+            }
+            if (guide()) continue;
+            return false; // stuck at a local minimum
         }
 
         Pair p{std::vector<double>(z.size()), std::vector<double>(z.size()), 0};
@@ -280,11 +436,41 @@ bool relax(Layout &l, const Box &square, const SqueezeConfig &cfg) {
         std::swap(z, zNext);
         std::swap(g, gNext);
         energy = eNext;
-        if (clearNext) return true;
+        if (untilClear && clearNext) return true;
     }
 
-    r.set(z);
+    e.set(z);
     return false;
+}
+
+// True if tree i + n/2 is tree i turned 180° and reflected through (cx, cy), for every
+// i < n/2: the layout SqueezeConfig::symmetric works on.
+bool pointSymmetric(const Layout &l, double cx, double cy) {
+    constexpr double kTol = 1e-6;
+    const std::size_t pairs = l.size() / 2;
+    if (pairs == 0) return false;
+    for (std::size_t i = 0; i < pairs; ++i) {
+        const Pose &p = l.poses[i];
+        const Pose &q = l.poses[i + pairs];
+        const double turn = geometry::normalizeDeg(q.deg - p.deg - 180);
+        const bool matches = std::abs(p.x + q.x - 2 * cx) < kTol &&
+                             std::abs(p.y + q.y - 2 * cy) < kTol &&
+                             std::min(turn, 360 - turn) < kTol;
+        if (!matches) return false;
+    }
+    return true;
+}
+
+// Moves every free tree at once down the slope of the overlap until the layout is valid
+// inside the square, or it gets stuck. Returns whether the layout came out valid; either way
+// `l` holds the lowest-energy poses found.
+bool relax(Layout &l, const Box &square, const SqueezeConfig &cfg, bool symmetric) {
+    Energy::Options o;
+    o.margin = cfg.relaxMargin;
+    o.movable = &cfg.movable;
+    o.symmetric = symmetric;
+    Energy e(l, square, o);
+    return minimise(e, cfg.relaxIters, cfg.glsRounds, true, cfg.stop);
 }
 } // namespace
 
@@ -293,15 +479,24 @@ std::optional<Layout> squeeze(const Layout &layout, double target, const Squeeze
     const std::size_t n = layout.size();
     if (n == 0 || cfg.iterations <= 0) return std::nullopt;
 
-    // Pull the trees toward the centre so their box fits the square; angles stay. Each axis
-    // shrinks only as much as it needs, so a narrow layout gets no overlap across its width.
+    const bool all = cfg.movable.empty();
+    auto moves = [&](std::size_t i) { return all || cfg.movable[i]; };
+    std::vector<std::size_t> free;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (moves(i)) free.push_back(i);
+    }
+    if (free.empty()) return std::nullopt;
+
+    // Pull the free trees toward the centre so their box fits the square; angles stay. Each
+    // axis shrinks only as much as it needs, so a narrow layout gets no overlap across its
+    // width. Trees that stay put must already fit.
     Layout l = layout;
     const Box b = l.bounds();
     const double cx = (b.minX + b.maxX) / 2;
     const double cy = (b.minY + b.maxY) / 2;
     const double fx = std::min(1.0, target / (b.maxX - b.minX));
     const double fy = std::min(1.0, target / (b.maxY - b.minY));
-    for (std::size_t i = 0; i < n; ++i) {
+    for (const std::size_t i : free) {
         const Pose p = l.poses[i];
         l.setPose(i, {cx + (p.x - cx) * fx, cy + (p.y - cy) * fy, p.deg});
     }
@@ -311,7 +506,9 @@ std::optional<Layout> squeeze(const Layout &layout, double target, const Squeeze
     // A valid layout inside the square, checked independently of the penalty.
     auto fits = [&] { return l.side() <= target && l.isValid() ? std::optional(l) : std::nullopt; };
 
-    if (cfg.relaxIters > 0 && relax(l, square, cfg)) return fits();
+    // Symmetric relax only on a layout that is symmetric about the square's centre.
+    const bool symmetric = cfg.symmetric && pointSymmetric(l, cx, cy);
+    if (cfg.relaxIters > 0 && relax(l, square, cfg, symmetric)) return fits();
 
     // Penalty: the sum of every overlapping pair's penetration squared, plus how far each tree
     // sticks out squared. Each tree counts its own violations, so a tree is clear at count 0.
@@ -336,12 +533,12 @@ std::optional<Layout> squeeze(const Layout &layout, double target, const Squeeze
     // Temperatures scale with the starting penalty per bad tree.
     const double scale = energy / static_cast<double>(bad.size());
 
-    std::uniform_int_distribution<std::size_t> pickTree(0, n - 1);
+    std::uniform_int_distribution<std::size_t> pickFree(0, free.size() - 1);
     std::uniform_real_distribution<double> unit(0.0, 1.0);
     auto jiggle = [&](double s) { return s * (2 * unit(rng) - 1); };
 
     // Each move's penetration with its neighbours, before and after: (j, depth).
-    std::vector<std::pair<std::size_t, double>> before, after;
+    std::vector<std::pair<std::size_t, double>> before, after, scratch;
     auto contacts = [&](std::size_t i, std::vector<std::pair<std::size_t, double>> &into) {
         into.clear();
         double sum = 0;
@@ -355,7 +552,13 @@ std::optional<Layout> squeeze(const Layout &layout, double target, const Squeeze
         });
         return sum;
     };
+    auto costAt = [&](std::size_t i, const Pose &p) {
+        l.setPose(i, p);
+        const double out = outside(l.boxes[i], square);
+        return contacts(i, scratch) + out * out;
+    };
 
+    constexpr int kLineTries = 8;
     for (long it = 0; it < cfg.iterations; ++it) {
         const bool checkStop = cfg.stop && it % 4096 == 0;
         if (checkStop && cfg.stop->load(std::memory_order_relaxed)) break;
@@ -364,25 +567,44 @@ std::optional<Layout> squeeze(const Layout &layout, double target, const Squeeze
         const double temp = scale * cfg.startTemp * std::pow(cfg.endTemp / cfg.startTemp, t);
         const double step = cfg.startStep * std::pow(cfg.endStep / cfg.startStep, t);
 
-        const bool fixBad = unit(rng) < cfg.badShare;
-        const std::size_t i =
-            fixBad ? bad[std::uniform_int_distribution<std::size_t>(0, bad.size() - 1)(rng)]
-                   : pickTree(rng);
+        std::size_t i = unit(rng) < cfg.badShare
+                            ? bad[std::uniform_int_distribution<std::size_t>(0, bad.size() - 1)(rng)]
+                            : free[pickFree(rng)];
+        if (!moves(i)) i = free[pickFree(rng)];
+
         const Pose old = l.poses[i];
+        const double outBefore = outside(l.boxes[i], square);
+        const double pairsBefore = contacts(i, before);
+
         Pose moved = old;
-        const double kind = unit(rng);
-        if (kind < 0.6) {
-            moved.x += jiggle(step);
-            moved.y += jiggle(step);
-        } else if (kind < 0.98) {
-            moved.deg += jiggle(100 * step);
+        if (unit(rng) < cfg.lineShare) {
+            // Several distances along one direction; take the cheapest.
+            const int axis = static_cast<int>(3 * unit(rng));
+            const double span = axis == 2 ? 400 * step : 4 * step;
+            double cheapest = INFINITY;
+            for (int k = 0; k < kLineTries; ++k) {
+                Pose p = old;
+                const double shift = jiggle(span);
+                (axis == 0 ? p.x : axis == 1 ? p.y : p.deg) += shift;
+                const double cost = costAt(i, p);
+                if (cost < cheapest) {
+                    cheapest = cost;
+                    moved = p;
+                }
+            }
         } else {
-            moved.deg += 180;
+            const double kind = unit(rng);
+            if (kind < 0.6) {
+                moved.x += jiggle(step);
+                moved.y += jiggle(step);
+            } else if (kind < 0.98) {
+                moved.deg += jiggle(100 * step);
+            } else {
+                moved.deg += 180;
+            }
         }
         moved.deg = geometry::normalizeDeg(moved.deg);
 
-        const double outBefore = outside(l.boxes[i], square);
-        const double pairsBefore = contacts(i, before);
         l.setPose(i, moved);
         const double outAfter = outside(l.boxes[i], square);
         const double pairsAfter = contacts(i, after);
@@ -415,10 +637,36 @@ std::optional<Layout> squeeze(const Layout &layout, double target, const Squeeze
         if (bad.empty()) break;
     }
 
-    // Single-tree moves left overlap: one more relax from where they got to.
-    if (!bad.empty() && !(cfg.relaxIters > 0 && relax(l, square, cfg))) return std::nullopt;
+    // Single-tree moves left overlap: one more relax from where they got to. The single-tree
+    // moves broke any symmetry, so this one runs free.
+    if (!bad.empty() && !(cfg.relaxIters > 0 && relax(l, square, cfg, false))) return std::nullopt;
 
     return fits();
+}
+
+double compress(Layout &layout, const CompressConfig &cfg) {
+    if (layout.size() == 0) return 0;
+
+    const Box b = layout.bounds();
+    const double cx = (b.minX + b.maxX) / 2;
+    const double cy = (b.minY + b.maxY) / 2;
+    const double side = layout.side();
+
+    Energy::Options o;
+    o.margin = cfg.margin;
+    o.movable = &cfg.movable;
+    o.symmetric = cfg.symmetric && pointSymmetric(layout, cx, cy);
+    o.sideIsVariable = true;
+    Energy e(layout, {cx - side / 2, cy - side / 2, cx + side / 2, cy + side / 2}, o);
+
+    for (int r = 0; r < cfg.rounds; ++r) {
+        if (cfg.stop && cfg.stop->load()) break;
+        const double f = cfg.rounds > 1 ? static_cast<double>(r) / (cfg.rounds - 1) : 1.0;
+        e.setWeight(cfg.startWeight * std::pow(cfg.endWeight / cfg.startWeight, f));
+        minimise(e, cfg.iterations, 0, false, cfg.stop);
+    }
+
+    return e.side();
 }
 
 Layout shake(const Layout &layout, int kicks, std::mt19937_64 &rng) {
@@ -464,5 +712,22 @@ Layout shake(const Layout &layout, int kicks, std::mt19937_64 &rng) {
     }
 
     return l;
+}
+
+std::vector<bool> borderTrees(const Layout &layout, double width) {
+    std::vector<bool> near(layout.size(), false);
+    if (layout.size() == 0) return near;
+
+    const Box b = layout.bounds();
+    const double half = layout.side() / 2;
+    const double cx = (b.minX + b.maxX) / 2;
+    const double cy = (b.minY + b.maxY) / 2;
+    for (std::size_t i = 0; i < layout.size(); ++i) {
+        const Box &t = layout.boxes[i];
+        near[i] = t.minX < cx - half + width || t.maxX > cx + half - width ||
+                  t.minY < cy - half + width || t.maxY > cy + half - width;
+    }
+
+    return near;
 }
 } // namespace packer::packing

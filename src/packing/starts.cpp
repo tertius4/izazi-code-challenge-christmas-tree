@@ -50,6 +50,36 @@ Layout randomStart(int n, std::mt19937_64 &rng) {
     return layout;
 }
 
+Layout denseStart(int n, double side, std::mt19937_64 &rng) {
+    std::uniform_real_distribution<double> unit(-0.5, 0.5);
+    Layout layout;
+    for (int i = 0; i < n; ++i) {
+        layout.add({side * unit(rng), side * unit(rng), 360.0 * (unit(rng) + 0.5)});
+    }
+
+    return layout;
+}
+
+Layout symmetricStart(int n, double side, std::mt19937_64 &rng) {
+    std::uniform_real_distribution<double> unit(-0.5, 0.5);
+    const int pairs = n / 2;
+    std::vector<Pose> half;
+    for (int i = 0; i < pairs; ++i) {
+        half.push_back({side * unit(rng), side * unit(rng), 360.0 * (unit(rng) + 0.5)});
+    }
+
+    Layout layout;
+    for (const Pose &p : half) {
+        layout.add(p);
+    }
+    for (const Pose &p : half) {
+        layout.add({-p.x, -p.y, geometry::normalizeDeg(p.deg + 180)});
+    }
+    if (n % 2 == 1) layout.add({0.1 * side * unit(rng), 0.1 * side * unit(rng), 360.0 * (unit(rng) + 0.5)});
+
+    return layout;
+}
+
 Layout withoutTree(const Layout &layout) {
     Layout result = layout;
     result.remove(layout.bestTreeToRemove());

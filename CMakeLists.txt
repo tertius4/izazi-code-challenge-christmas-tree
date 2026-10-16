@@ -17,16 +17,20 @@ add_library(packer_lib
   src/io/csv_writer.cpp
   src/io/submission.cpp
   src/io/report.cpp
+  src/io/crystals.cpp
   src/geometry/polygon.cpp
   src/geometry/collision.cpp
   src/tree/tree.cpp
   src/packing/layout.cpp
   src/packing/starts.cpp
   src/packing/lattice.cpp
+  src/packing/crystal.cpp
   src/packing/annealer.cpp
   src/packing/rotation.cpp
   src/packing/solver.cpp
   src/packing/squeezer.cpp
+  src/packing/nfp.cpp
+  src/packing/crossover.cpp
   src/packing/improver.cpp
 )
 
