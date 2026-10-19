@@ -33,9 +33,7 @@ std::vector<std::vector<std::string>> submissionTable(const std::vector<packing:
     for (std::size_t n = 1; n < layouts.size(); ++n) {
         const packing::Layout &layout = layouts[n];
         // Moving every tree by the same amount keeps the packing valid and stays within ±100.
-        const geometry::Box b = layout.bounds();
-        const double cx = (b.minX + b.maxX) / 2;
-        const double cy = (b.minY + b.maxY) / 2;
+        const auto [cx, cy] = geometry::centre(layout.bounds());
 
         for (std::size_t i = 0; i < layout.size(); ++i) {
             const geometry::Pose &p = layout.poses[i];

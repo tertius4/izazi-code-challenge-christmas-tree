@@ -9,11 +9,6 @@ namespace packer::packing {
 namespace {
 using geometry::Point;
 
-Point centreOf(const Layout &l) {
-    const Box b = l.bounds();
-    return {(b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2};
-}
-
 // How much tree i overlaps the others: its summed penetration.
 double overlapOf(const Layout &l, std::size_t i) {
     double sum = 0;
@@ -27,8 +22,8 @@ double overlapOf(const Layout &l, std::size_t i) {
 
 Layout crossover(const Layout &a, const Layout &b, int n, std::mt19937_64 &rng) {
     std::uniform_real_distribution<double> unit(0.0, 1.0);
-    const Point ca = centreOf(a);
-    const Point cb = centreOf(b);
+    const Point ca = geometry::centre(a.bounds());
+    const Point cb = geometry::centre(b.bounds());
     const double side = a.side();
 
     // b turned by a quarter turns (the square looks the same), maybe mirrored left to right

@@ -24,8 +24,7 @@ struct Energy {
 Energy measure(const Layout &layout, double pullWeight) {
     Energy e;
     e.box = layout.bounds();
-    const double cx = (e.box.minX + e.box.maxX) / 2;
-    const double cy = (e.box.minY + e.box.maxY) / 2;
+    const auto [cx, cy] = geometry::centre(e.box);
     for (const Box &t : layout.boxes) {
         e.pull += reach(t, cx, cy);
     }
@@ -51,8 +50,7 @@ Energy afterMove(const Energy &e, const Box &before, const Box &after, const Lay
         return measure(layout, pullWeight);
     }
 
-    const double cx = (e.box.minX + e.box.maxX) / 2;
-    const double cy = (e.box.minY + e.box.maxY) / 2;
+    const auto [cx, cy] = geometry::centre(e.box);
     Energy next = e;
     next.pull += reach(after, cx, cy) - reach(before, cx, cy);
     next.value = next.side + pullWeight * next.pull / static_cast<double>(layout.size());
@@ -103,8 +101,7 @@ void anneal(Layout &layout, const AnnealConfig &cfg, std::mt19937_64 &rng) {
 
         undo.clear();
         const Box b = current.box;
-        const double cx = (b.minX + b.maxX) / 2;
-        const double cy = (b.minY + b.maxY) / 2;
+        const auto [cx, cy] = geometry::centre(b);
         const double r = unit(rng);
         bool legal = false;
         bool single = false; // a one-tree move: tree `i`, whose box was `before`

@@ -11,13 +11,10 @@
 
 namespace packer::packing {
 namespace {
+using geometry::centre;
+using geometry::outside;
 using geometry::Point;
-
-// How far a box sticks out of the square, summed over its four sides.
-double outside(const Box &t, const Box &square) {
-    return std::max(0.0, square.minX - t.minX) + std::max(0.0, t.maxX - square.maxX) +
-           std::max(0.0, square.minY - t.minY) + std::max(0.0, t.maxY - square.maxY);
-}
+using geometry::squareAround;
 
 // The trees that still overlap or stick out, kept so that any of them can be picked, added or
 // dropped in constant time.
@@ -77,8 +74,7 @@ class Energy {
 
     Energy(Layout &l, const Box &square, const Options &o)
         : l_(l), margin_(o.margin), sideIsVariable_(o.sideIsVariable),
-          cx_((square.minX + square.maxX) / 2), cy_((square.minY + square.maxY) / 2),
-          half_((square.maxX - square.minX) / 2) {
+          cx_(centre(square).x), cy_(centre(square).y), half_((square.maxX - square.minX) / 2) {
         const std::size_t n = l.size();
         block_.assign(n, -1);
         mirrored_.assign(n, false);
@@ -107,7 +103,7 @@ class Energy {
     }
 
     Box square() const {
-        return {cx_ - half_, cy_ - half_, cx_ + half_, cy_ + half_};
+        return squareAround({cx_, cy_}, 2 * half_);
     }
 
     void setWeight(double w) {
@@ -492,8 +488,7 @@ std::optional<Layout> squeeze(const Layout &layout, double target, const Squeeze
     // width. Trees that stay put must already fit.
     Layout l = layout;
     const Box b = l.bounds();
-    const double cx = (b.minX + b.maxX) / 2;
-    const double cy = (b.minY + b.maxY) / 2;
+    const auto [cx, cy] = centre(b);
     const double fx = std::min(1.0, target / (b.maxX - b.minX));
     const double fy = std::min(1.0, target / (b.maxY - b.minY));
     for (const std::size_t i : free) {
@@ -501,7 +496,7 @@ std::optional<Layout> squeeze(const Layout &layout, double target, const Squeeze
         l.setPose(i, {cx + (p.x - cx) * fx, cy + (p.y - cy) * fy, p.deg});
     }
 
-    const Box square{cx - target / 2, cy - target / 2, cx + target / 2, cy + target / 2};
+    const Box square = squareAround({cx, cy}, target);
 
     // A valid layout inside the square, checked independently of the penalty.
     auto fits = [&] { return l.side() <= target && l.isValid() ? std::optional(l) : std::nullopt; };
@@ -647,9 +642,7 @@ std::optional<Layout> squeeze(const Layout &layout, double target, const Squeeze
 double compress(Layout &layout, const CompressConfig &cfg) {
     if (layout.size() == 0) return 0;
 
-    const Box b = layout.bounds();
-    const double cx = (b.minX + b.maxX) / 2;
-    const double cy = (b.minY + b.maxY) / 2;
+    const auto [cx, cy] = centre(layout.bounds());
     const double side = layout.side();
 
     Energy::Options o;
@@ -657,7 +650,7 @@ double compress(Layout &layout, const CompressConfig &cfg) {
     o.movable = &cfg.movable;
     o.symmetric = cfg.symmetric && pointSymmetric(layout, cx, cy);
     o.sideIsVariable = true;
-    Energy e(layout, {cx - side / 2, cy - side / 2, cx + side / 2, cy + side / 2}, o);
+    Energy e(layout, squareAround({cx, cy}, side), o);
 
     for (int r = 0; r < cfg.rounds; ++r) {
         if (cfg.stop && cfg.stop->load()) break;
@@ -718,14 +711,11 @@ std::vector<bool> borderTrees(const Layout &layout, double width) {
     std::vector<bool> near(layout.size(), false);
     if (layout.size() == 0) return near;
 
-    const Box b = layout.bounds();
-    const double half = layout.side() / 2;
-    const double cx = (b.minX + b.maxX) / 2;
-    const double cy = (b.minY + b.maxY) / 2;
+    const Box sq = squareAround(centre(layout.bounds()), layout.side());
     for (std::size_t i = 0; i < layout.size(); ++i) {
         const Box &t = layout.boxes[i];
-        near[i] = t.minX < cx - half + width || t.maxX > cx + half - width ||
-                  t.minY < cy - half + width || t.maxY > cy + half - width;
+        near[i] = t.minX < sq.minX + width || t.maxX > sq.maxX - width ||
+                  t.minY < sq.minY + width || t.maxY > sq.maxY - width;
     }
 
     return near;

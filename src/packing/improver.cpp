@@ -612,11 +612,9 @@ class Run {
                 if (!worth(Op::Ruin, n, rng)) continue;
                 const Timed timed(*this, Op::Ruin, n);
                 const std::size_t count = std::uniform_int_distribution<std::size_t>(3, most)(rng);
-                const Box b = walk.bounds();
-                const double half = bestSide(n) / 2;
-                const double cx = (b.minX + b.maxX) / 2, cy = (b.minY + b.maxY) / 2;
-                const Layout ruined =
-                    ruinAndRecreate(walk, {cx - half, cy - half, cx + half, cy + half}, count, rng);
+                const Box square =
+                    geometry::squareAround(geometry::centre(walk.bounds()), bestSide(n));
+                const Layout ruined = ruinAndRecreate(walk, square, count, rng);
                 std::optional<Layout> settled =
                     squeezeInto(ruined, bestSide(n), rng, cfg_.shakeItersPerTree);
                 if (!settled) continue;
@@ -752,9 +750,9 @@ class Run {
         std::uniform_real_distribution<double> unit(0.0, 1.0);
         const Box b = l.bounds();
         if (unit(rng) < 0.5) {
-            const double cx = (b.minX + b.maxX) / 2, cy = (b.minY + b.maxY) / 2;
-            const double half = std::max(target, l.side()) / 2;
-            l.add(bestInsertion(l, {cx - half, cy - half, cx + half, cy + half}, 8, rng));
+            const Box square =
+                geometry::squareAround(geometry::centre(b), std::max(target, l.side()));
+            l.add(bestInsertion(l, square, 8, rng));
         } else {
             l.add({b.minX + unit(rng) * (b.maxX - b.minX), b.minY + unit(rng) * (b.maxY - b.minY),
                    360.0 * unit(rng)});

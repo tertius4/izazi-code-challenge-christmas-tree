@@ -36,9 +36,7 @@ double sideTurnedBy(const Layout &layout, double cx, double cy, double deg, Poly
 bool rotateWhole(Layout &layout) {
     if (layout.size() == 0) return false;
 
-    const Box b = layout.bounds();
-    const double cx = (b.minX + b.maxX) / 2;
-    const double cy = (b.minY + b.maxY) / 2;
+    const auto [cx, cy] = geometry::centre(layout.bounds());
     const double before = layout.side();
     Polygon scratch;
 

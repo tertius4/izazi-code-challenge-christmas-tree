@@ -5,6 +5,7 @@
 
 namespace packer::packing {
 namespace {
+using geometry::outside;
 using geometry::Point;
 
 double cross(const Point &o, const Point &a, const Point &b) {
@@ -30,11 +31,6 @@ std::vector<Point> hull(std::vector<Point> pts) {
     }
     h.resize(k - 1);
     return h;
-}
-
-double outside(const Box &t, const Box &square) {
-    return std::max(0.0, square.minX - t.minX) + std::max(0.0, t.maxX - square.maxX) +
-           std::max(0.0, square.minY - t.minY) + std::max(0.0, t.maxY - square.maxY);
 }
 } // namespace
 
@@ -80,8 +76,7 @@ Pose bestInsertion(const Layout &layout, const Box &square, int angles, std::mt1
                          : Box{std::max(square.minX, region->minX), std::max(square.minY, region->minY),
                                std::min(square.maxX, region->maxX), std::min(square.maxY, region->maxY)};
     const double side = std::max(area.maxX - area.minX, area.maxY - area.minY);
-    const double cx = (area.minX + area.maxX) / 2;
-    const double cy = (area.minY + area.maxY) / 2;
+    const auto [cx, cy] = geometry::centre(area);
 
     Layout l = layout;
     l.add({cx, cy, 0});
