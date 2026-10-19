@@ -8,7 +8,7 @@ improvements, so the score keeps getting better the more you run it. The current
 
 ## Quick start
 
-Requirements: a C++20 compiler (GCC 10+ / Clang 12+) and CMake 3.16+ (`sudo apt install build-essential cmake`). OpenMP is used if found. The evaluator also needs `python3` with `pandas` and `shapely`.
+Requirements: a C++20 compiler (GCC 10+ / Clang 12+) and CMake 3.16+ (`sudo apt install build-essential cmake`). The evaluator also needs `python3` with `pandas` and `shapely`.
 
 ```bash
 ./run.sh            # no args: interactive menu
@@ -104,6 +104,7 @@ If `data/current-best/results.csv` doesn't exist, the first run builds every lay
 | `src/cli`, `src/io` | argument parsing; CSV reading/writing, submission and report output |
 | `src/tree` | the tree: outline, convex parts, collision test |
 | `src/geometry` | general polygon code (used by tests, lattice cuts and rotation) |
+| `src/util` | `parallelFor`: runs a loop on a pool of `std::thread`s |
 | `src/packing` | layout, starts, lattice, crystal, annealer, squeezer, nfp, crossover, rotation, improver, solver |
 | `tests/` | GoogleTest unit tests |
 | `scripts/evaluator.py` | independent validation, scoring and visualisation |

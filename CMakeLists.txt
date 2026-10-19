@@ -36,10 +36,8 @@ add_library(packer_lib
 
 target_include_directories(packer_lib PUBLIC src)
 target_compile_options(packer_lib PRIVATE -Wall -Wextra)
-find_package(OpenMP)
-if(OpenMP_CXX_FOUND)
-  target_link_libraries(packer_lib PUBLIC OpenMP::OpenMP_CXX)
-endif()
+find_package(Threads REQUIRED)
+target_link_libraries(packer_lib PUBLIC Threads::Threads)
 
 add_executable(main src/main.cpp)
 target_link_libraries(main PRIVATE packer_lib)

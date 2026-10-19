@@ -40,6 +40,7 @@ struct SolverConfig {
     double polishTemp = 5e-4;
     double polishStep = 0.01;
     unsigned seed = 42;
+    int threads = 0; // 0: every core
 };
 
 struct Solution {

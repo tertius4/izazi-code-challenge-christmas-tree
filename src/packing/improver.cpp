@@ -188,7 +188,8 @@ class Run {
         std::fprintf(out, "\n%-22s", "gain/hour by n");
         for (std::size_t b = 0; b < kBands.size(); ++b) {
             const int lo = b == 0 ? 1 : kBands[b - 1] + 1;
-            std::fprintf(out, " %9s", (std::to_string(lo) + "-" + std::to_string(kBands[b])).c_str());
+            std::fprintf(out, " %9s",
+                         (std::to_string(lo) + "-" + std::to_string(kBands[b])).c_str());
         }
         std::fprintf(out, "\n");
         for (const std::size_t k : order) {
@@ -217,15 +218,15 @@ class Run {
     const std::uint64_t seed_;
     const Clock::time_point started_ = Clock::now();
 
-    std::vector<bool> busy_;                // n some thread is working on
-    std::vector<double> shrink_;            // how much the next squeeze of each n tries to take off
-    std::vector<std::vector<Layout>> elites_; // per n, the best few distinct layouts, smallest first
-    std::vector<double> seconds_;           // per n, time spent on it this run
-    std::vector<double> gain_;              // per n, score gained this run
-    std::vector<int> visits_;               // per n, tasks started this run
-    std::deque<Task> urgent_;               // neighbour tries set off by an improvement
-    std::mt19937_64 pick_;                  // for choosing between the sweep and the rates
-    int cursor_ = 0;                        // the next n the sweep visits
+    std::vector<bool> busy_;     // n some thread is working on
+    std::vector<double> shrink_; // how much the next squeeze of each n tries to take off
+    std::vector<std::vector<Layout>> elites_;   // per n, the best few distinct layouts, smallest first
+    std::vector<double> seconds_; // per n, time spent on it this run
+    std::vector<double> gain_;    // per n, score gained this run
+    std::vector<int> visits_;     // per n, tasks started this run
+    std::deque<Task> urgent_;     // neighbour tries set off by an improvement
+    std::mt19937_64 pick_;        // for choosing between the sweep and the rates
+    int cursor_ = 0;              // the next n the sweep visits
     int pass_ = 1;
 
     struct OpStats {
@@ -253,7 +254,8 @@ class Run {
     // Charges the time from its creation to its end to one try of `op` on n.
     class Timed {
       public:
-        Timed(Run &run, Op op, int n) : run_(run), op_(op), band_(bandOf(n)), began_(Clock::now()) {}
+        Timed(Run &run, Op op, int n) : run_(run), op_(op), band_(bandOf(n)), began_(Clock::now()) {
+        }
         ~Timed() {
             const double s = std::chrono::duration<double>(Clock::now() - began_).count();
             std::lock_guard lock(run_.mutex);
@@ -478,7 +480,8 @@ class Run {
 
     // Squeezes into ever smaller squares while that works, offering every success. Returns
     // the smallest layout reached.
-    Layout descend(int n, Op op, Layout l, int tries, std::mt19937_64 &rng, bool symmetric = false) {
+    Layout descend(int n, Op op, Layout l, int tries, std::mt19937_64 &rng,
+                   bool symmetric = false) {
         double shrink = 4e-3;
         for (int k = 0; k < tries && !stop_.load(); ++k) {
             SqueezeConfig sc = squeezeConfig(l);
@@ -497,36 +500,56 @@ class Run {
         return l;
     }
 
-    // Every operator on n once, in order.
+    // Every operator on n once, in order. `step` numbers the random streams they draw, so
+    // each try gets its own.
     void visit(const Task &task) {
-        const int n = task.n;
         int step = 0;
-        std::uniform_real_distribution<double> unit(0.0, 1.0);
+        tryRemove(task, step);
+        tryAdd(task, step);
+        squeezeLoop(task, step);
+        tryBorder(task, step);
+        compressLoop(task, step);
+        shakeWalk(task, step);
+        tryCrossover(task, step);
+        ruinWalk(task, step);
+        tryCrystal(task, step);
+        denseStarts(task, step);
+        refineWalk(task, step);
+        tryRandom(task, step);
+    }
 
-        // n+1 minus each of its best few trees to remove, squeezed into the best square so far.
+    // n+1 minus each of its best few trees to remove, squeezed into the best square so far.
+    void tryRemove(const Task &task, int &step) {
+        const int n = task.n;
         const bool hasBiggerN = n + 1 < static_cast<int>(best_.size());
-        if (hasBiggerN) {
-            const Layout from = bestCopy(n + 1);
-            const std::vector<std::size_t> order = from.removalOrder();
-            const int tries = std::min<int>(cfg_.removeCandidates, static_cast<int>(order.size()));
-            for (int k = 0; k < tries && !stop_.load(); ++k) {
-                std::mt19937_64 rng = rngFor(task, step++);
-                if (!worth(Op::Remove, n, rng)) continue;
-                const Timed timed(*this, Op::Remove, n);
-                Layout l = from;
-                l.remove(order[k]);
-                offerIf(n, Op::Remove, squeezeInto(l, squeezeTarget(n), rng));
-            }
-        }
+        if (!hasBiggerN) return;
 
-        // n-1 plus a tree, squeezed into the best square so far.
-        if (std::mt19937_64 rng = rngFor(task, step++);
-            n - 1 >= 1 && !stop_.load() && worth(Op::Add, n, rng)) {
-            const Timed timed(*this, Op::Add, n);
-            offerIf(n, Op::Add, addAndSqueeze(n, rng));
+        const Layout from = bestCopy(n + 1);
+        const std::vector<std::size_t> order = from.removalOrder();
+        const int tries = std::min<int>(cfg_.removeCandidates, static_cast<int>(order.size()));
+        for (int k = 0; k < tries && !stop_.load(); ++k) {
+            std::mt19937_64 rng = rngFor(task, step++);
+            if (!worth(Op::Remove, n, rng)) continue;
+            const Timed timed(*this, Op::Remove, n);
+            Layout l = from;
+            l.remove(order[k]);
+            offerIf(n, Op::Remove, squeezeInto(l, squeezeTarget(n), rng));
         }
+    }
 
-        // Squeeze the best layout until it fails often enough.
+    // n-1 plus a tree, squeezed into the best square so far.
+    void tryAdd(const Task &task, int &step) {
+        const int n = task.n;
+        std::mt19937_64 rng = rngFor(task, step++);
+        if (n - 1 < 1 || stop_.load() || !worth(Op::Add, n, rng)) return;
+
+        const Timed timed(*this, Op::Add, n);
+        offerIf(n, Op::Add, addAndSqueeze(n, rng));
+    }
+
+    // Squeeze the best layout until it fails often enough.
+    void squeezeLoop(const Task &task, int &step) {
+        const int n = task.n;
         for (int failures = 0; failures < cfg_.squeezeFailures && !stop_.load();) {
             const Timed timed(*this, Op::Squeeze, n);
             std::mt19937_64 rng = rngFor(task, step++);
@@ -535,19 +558,26 @@ class Run {
             adaptShrink(n, worked);
             failures = worked ? 0 : failures + 1;
         }
+    }
 
-        // Only the trees near the walls move; the inside stays as it is.
-        if (std::mt19937_64 rng = rngFor(task, step++); !stop_.load() && worth(Op::Border, n, rng)) {
-            const Timed timed(*this, Op::Border, n);
-            const Layout b = bestCopy(n);
-            SqueezeConfig sc = squeezeConfig(b);
-            sc.movable = borderTrees(b, cfg_.borderWidth);
-            const bool hasInside = std::count(sc.movable.begin(), sc.movable.end(), false) > 0;
-            if (hasInside) offerIf(n, Op::Border, squeezeWith(b, squeezeTarget(n), sc, rng));
-        }
+    // Only the trees near the walls move; the inside stays as it is.
+    void tryBorder(const Task &task, int &step) {
+        const int n = task.n;
+        std::mt19937_64 rng = rngFor(task, step++);
+        if (stop_.load() || !worth(Op::Border, n, rng)) return;
 
-        // The side as a variable: the walls close in as far as the trees let them. Each win
-        // is the next start, until it fails often enough; every other try works twice as long.
+        const Timed timed(*this, Op::Border, n);
+        const Layout b = bestCopy(n);
+        SqueezeConfig sc = squeezeConfig(b);
+        sc.movable = borderTrees(b, cfg_.borderWidth);
+        const bool hasInside = std::count(sc.movable.begin(), sc.movable.end(), false) > 0;
+        if (hasInside) offerIf(n, Op::Border, squeezeWith(b, squeezeTarget(n), sc, rng));
+    }
+
+    // The side as a variable: the walls close in as far as the trees let them. Each win is the
+    // next start, until it fails often enough; every other try works twice as long.
+    void compressLoop(const Task &task, int &step) {
+        const int n = task.n;
         for (int k = 0, failures = 0;
              k < cfg_.compressTries && failures < cfg_.compressFailures && !stop_.load(); ++k) {
             std::mt19937_64 rng = rngFor(task, step++);
@@ -564,131 +594,120 @@ class Run {
                                 offerIf(n, Op::Compress, squeezeInto(c, side * (1 + 1e-7), rng));
             failures = worked ? 0 : failures + 1;
         }
+    }
 
-        // Shake and settle: a walk through arrangements as good as the best, each one a fresh
-        // start for a squeeze into a smaller square.
-        Layout current = bestCopy(n);
-        for (int k = 0; k < cfg_.shakeTries && !stop_.load(); ++k) {
-            std::mt19937_64 rng = rngFor(task, step++);
-            if (!worth(Op::Shake, n, rng)) continue;
-            const Timed timed(*this, Op::Shake, n);
-            const Layout kicked = shake(current, 1 + k % cfg_.shakeKicks, rng);
-            std::optional<Layout> settled =
-                squeezeInto(kicked, bestSide(n), rng, cfg_.shakeItersPerTree);
-            if (!settled) continue;
+    // Shake and settle: a walk through arrangements as good as the best, each one a fresh
+    // start for a squeeze into a smaller square.
+    void shakeWalk(const Task &task, int &step) {
+        walk(task, step, Op::Shake, cfg_.shakeTries,
+             [&](const Layout &current, int k, std::mt19937_64 &rng) {
+                 return shake(current, 1 + k % cfg_.shakeKicks, rng);
+             });
+    }
 
-            current = std::move(*settled);
-            addElite(n, current);
-            const bool worked = offer(n, Op::Shake, current) ||
-                                offerIf(n, Op::Shake, squeezeInto(current, squeezeTarget(n), rng));
-            if (worked) current = bestCopy(n);
-        }
-
-        // Crossover: half of the best with half of another good layout, settled.
+    // Crossover: half of the best with half of another good layout, settled.
+    void tryCrossover(const Task &task, int &step) {
+        const int n = task.n;
         for (int k = 0; k < cfg_.crossoverTries && !stop_.load(); ++k) {
             std::mt19937_64 rng = rngFor(task, step++);
             if (!worth(Op::Crossover, n, rng)) continue;
             const Timed timed(*this, Op::Crossover, n);
             const Layout a = bestCopy(n);
             const Layout b = partnerFor(n, rng);
-            const Layout child = crossover(a, b, n, rng);
-            std::optional<Layout> settled =
-                squeezeInto(child, bestSide(n), rng, cfg_.shakeItersPerTree);
-            if (!settled) continue;
-
-            addElite(n, *settled);
-            if (!offer(n, Op::Crossover, *settled)) {
-                offerIf(n, Op::Crossover, squeezeInto(*settled, squeezeTarget(n), rng));
-            }
+            bool worked = false;
+            settleAndOffer(n, Op::Crossover, crossover(a, b, n, rng), rng, worked);
         }
+    }
 
-        // Ruin and recreate: a patch of trees taken out and put back at the best spots,
-        // settled into the best square; a walk like shaking, each step squeezed once.
-        if (n >= cfg_.ruinMinN) {
-            Layout walk = bestCopy(n);
-            const std::size_t most = std::max<std::size_t>(3, static_cast<std::size_t>(cfg_.ruinShare * n));
-            for (int k = 0; k < cfg_.ruinTries && !stop_.load(); ++k) {
-                std::mt19937_64 rng = rngFor(task, step++);
-                if (!worth(Op::Ruin, n, rng)) continue;
-                const Timed timed(*this, Op::Ruin, n);
-                const std::size_t count = std::uniform_int_distribution<std::size_t>(3, most)(rng);
-                const Box square =
-                    geometry::squareAround(geometry::centre(walk.bounds()), bestSide(n));
-                const Layout ruined = ruinAndRecreate(walk, square, count, rng);
-                std::optional<Layout> settled =
-                    squeezeInto(ruined, bestSide(n), rng, cfg_.shakeItersPerTree);
-                if (!settled) continue;
+    // Ruin and recreate: a patch of trees taken out and put back at the best spots, settled
+    // into the best square; a walk like shaking, each step squeezed once.
+    void ruinWalk(const Task &task, int &step) {
+        const int n = task.n;
+        if (n < cfg_.ruinMinN) return;
 
-                walk = std::move(*settled);
-                addElite(n, walk);
-                const bool worked = offer(n, Op::Ruin, walk) ||
-                                    offerIf(n, Op::Ruin, squeezeInto(walk, squeezeTarget(n), rng));
-                if (worked) walk = bestCopy(n);
-            }
-        }
+        const std::size_t most =
+            std::max<std::size_t>(3, static_cast<std::size_t>(cfg_.ruinShare * n));
+        walk(task, step, Op::Ruin, cfg_.ruinTries,
+             [&](const Layout &current, int, std::mt19937_64 &rng) {
+                 const std::size_t count = std::uniform_int_distribution<std::size_t>(3, most)(rng);
+                 const Box square =
+                     geometry::squareAround(geometry::centre(current.bounds()), bestSide(n));
+                 return ruinAndRecreate(current, square, count, rng);
+             });
+    }
 
-        // A crystal cut: compress its border first (the inside is already a perfect
-        // pattern), then all of it, and squeeze down from there if it came close.
+    // A crystal cut: compress its border first (the inside is already a perfect pattern), then
+    // all of it, and squeeze down from there if it came close.
+    void tryCrystal(const Task &task, int &step) {
+        const int n = task.n;
         const bool cutCrystal = !cfg_.crystals.empty() && n >= cfg_.crystalMinN;
-        if (std::mt19937_64 rng = rngFor(task, step++);
-            cutCrystal && !stop_.load() && worth(Op::Crystal, n, rng)) {
-            const Timed timed(*this, Op::Crystal, n);
-            const Crystal &c = cfg_.crystals[static_cast<std::size_t>(task.visit) % cfg_.crystals.size()];
-            Layout cut = bestCrystalCut(c, n, cfg_.crystalAngles, rng).first;
-            offer(n, Op::Crystal, cut);
+        std::mt19937_64 rng = rngFor(task, step++);
+        if (!cutCrystal || stop_.load() || !worth(Op::Crystal, n, rng)) return;
+
+        const Timed timed(*this, Op::Crystal, n);
+        const std::size_t which = static_cast<std::size_t>(task.visit) % cfg_.crystals.size();
+        const Crystal &c = cfg_.crystals[which];
+        Layout cut = bestCrystalCut(c, n, cfg_.crystalAngles, rng).first;
+        offer(n, Op::Crystal, cut);
+
+        CompressConfig cc = compressConfig();
+        cc.movable = borderTrees(cut, cfg_.borderWidth);
+        compress(cut, cc);
+        cc.movable.clear();
+        const double side = compress(cut, cc);
+        std::optional<Layout> r = squeezeInto(cut, side * (1 + 1e-7), rng, cfg_.shakeItersPerTree);
+        if (!r || stop_.load()) return;
+
+        offer(n, Op::Crystal, *r);
+        addElite(n, *r); // a different arrangement: a good crossover partner
+        if (r->side() < bestSide(n) * (1 + cfg_.crystalSlack)) {
+            descend(n, Op::Crystal, *r, cfg_.crystalDescent, rng);
+        }
+    }
+
+    // Dense starts: random overlapping trees in a roomy square, compressed and squeezed valid,
+    // then down if they came close. Half are point-symmetric, kept so on the way.
+    void denseStarts(const Task &task, int &step) {
+        const int n = task.n;
+        if (n < 2 || n > cfg_.denseMax) return;
+
+        std::uniform_real_distribution<double> unit(0.0, 1.0);
+        const int starts = cfg_.denseStarts * (n <= cfg_.denseSmallMax ? cfg_.denseSmallBoost : 1);
+        for (int k = 0; k < starts && !stop_.load(); ++k) {
+            std::mt19937_64 rng = rngFor(task, step++);
+            const bool symmetric = n >= 4 && unit(rng) < 0.5;
+            const Op op = symmetric ? Op::Symmetric : Op::Dense;
+            if (!worth(op, n, rng)) continue;
+            const Timed timed(*this, op, n);
+            const double roomy = 1.3 * bestSide(n);
+            Layout l = symmetric ? symmetricStart(n, roomy, rng) : denseStart(n, roomy, rng);
 
             CompressConfig cc = compressConfig();
-            cc.movable = borderTrees(cut, cfg_.borderWidth);
-            compress(cut, cc);
-            cc.movable.clear();
-            const double side = compress(cut, cc);
-            std::optional<Layout> r = squeezeInto(cut, side * (1 + 1e-7), rng, cfg_.shakeItersPerTree);
-            if (r && !stop_.load()) {
-                offer(n, Op::Crystal, *r);
-                addElite(n, *r); // a different arrangement: a good crossover partner
-                if (r->side() < bestSide(n) * (1 + cfg_.crystalSlack)) {
-                    descend(n, Op::Crystal, *r, cfg_.crystalDescent, rng);
-                }
+            cc.symmetric = symmetric;
+            const double side = compress(l, cc);
+            SqueezeConfig sc = squeezeConfig(l);
+            sc.symmetric = symmetric;
+            sc.glsRounds = cfg_.denseGlsRounds;
+            std::optional<Layout> r = squeezeWith(l, side * (1 + 1e-6), sc, rng);
+            if (!r) continue;
+            offer(n, op, *r);
+            if (r->side() < bestSide(n) * (1 + cfg_.denseSlack)) {
+                descend(n, op, *r, cfg_.denseDescent, rng, symmetric);
             }
         }
+    }
 
-        // Dense starts: random overlapping trees in a roomy square, compressed and squeezed
-        // valid, then down if they came close. Half are point-symmetric, kept so on the way.
-        if (n >= 2 && n <= cfg_.denseMax) {
-            const int starts =
-                cfg_.denseStarts * (n <= cfg_.denseSmallMax ? cfg_.denseSmallBoost : 1);
-            for (int k = 0; k < starts && !stop_.load(); ++k) {
-                std::mt19937_64 rng = rngFor(task, step++);
-                const bool symmetric = n >= 4 && unit(rng) < 0.5;
-                const Op op = symmetric ? Op::Symmetric : Op::Dense;
-                if (!worth(op, n, rng)) continue;
-                const Timed timed(*this, op, n);
-                const double roomy = 1.3 * bestSide(n);
-                Layout l = symmetric ? symmetricStart(n, roomy, rng) : denseStart(n, roomy, rng);
-
-                CompressConfig cc = compressConfig();
-                cc.symmetric = symmetric;
-                const double side = compress(l, cc);
-                SqueezeConfig sc = squeezeConfig(l);
-                sc.symmetric = symmetric;
-                sc.glsRounds = cfg_.denseGlsRounds;
-                std::optional<Layout> r = squeezeWith(l, side * (1 + 1e-6), sc, rng);
-                if (!r) continue;
-                offer(n, op, *r);
-                if (r->side() < bestSide(n) * (1 + cfg_.denseSlack)) {
-                    descend(n, op, *r, cfg_.denseDescent, rng, symmetric);
-                }
-            }
-        }
-
-        // Refine: a walk of re-anneals, hotter at each step of the ladder. The anneal can drop
-        // a tree into a hole, which a squeeze can't; the squeeze then takes up the room.
+    // Refine: a walk of re-anneals, hotter at each step of the ladder. The anneal can drop a
+    // tree into a hole, which a squeeze can't; the squeeze then takes up the room.
+    void refineWalk(const Task &task, int &step) {
+        const int n = task.n;
         Layout walk = bestCopy(n);
         for (int k = 0; k < cfg_.refineTries && !stop_.load(); ++k) {
             std::mt19937_64 rng = rngFor(task, step++);
             if (!worth(Op::Refine, n, rng)) continue;
             const Timed timed(*this, Op::Refine, n);
-            const double temp = cfg_.refineTemps[static_cast<std::size_t>(k) % cfg_.refineTemps.size()];
+            const double temp =
+                cfg_.refineTemps[static_cast<std::size_t>(k) % cfg_.refineTemps.size()];
             Layout l = walk;
             anneal(l, cfg_.refineItersPerTree, temp, cfg_.refineStep, rng);
             const bool worked = offer(n, Op::Refine, l);
@@ -700,15 +719,55 @@ class Run {
                 walk = std::move(l); // as good as the best, near enough: walk on from it
             }
         }
+    }
 
+    // Small n: a fresh random start every other visit, annealed hot and long.
+    void tryRandom(const Task &task, int &step) {
+        const int n = task.n;
         const bool randomTurn = n <= cfg_.smallMax && task.visit % 2 == 1;
-        if (std::mt19937_64 rng = rngFor(task, step++);
-            randomTurn && !stop_.load() && worth(Op::Random, n, rng)) {
-            const Timed timed(*this, Op::Random, n);
-            Layout l = randomStart(n, rng);
-            anneal(l, cfg_.randomItersPerTree, cfg_.randomTemp, cfg_.randomStep, rng);
-            offer(n, Op::Random, std::move(l));
+        std::mt19937_64 rng = rngFor(task, step++);
+        if (!randomTurn || stop_.load() || !worth(Op::Random, n, rng)) return;
+
+        const Timed timed(*this, Op::Random, n);
+        Layout l = randomStart(n, rng);
+        anneal(l, cfg_.randomItersPerTree, cfg_.randomTemp, cfg_.randomStep, rng);
+        offer(n, Op::Random, std::move(l));
+    }
+
+    // A walk through arrangements as good as the best: each try perturbs the current layout
+    // (perturb(current, k, rng)), settles it (see settleAndOffer()) and walks on from there,
+    // or from the new best after a win.
+    template <class Perturb>
+    void walk(const Task &task, int &step, Op op, int tries, Perturb perturb) {
+        const int n = task.n;
+        Layout current = bestCopy(n);
+        for (int k = 0; k < tries && !stop_.load(); ++k) {
+            std::mt19937_64 rng = rngFor(task, step++);
+            if (!worth(op, n, rng)) continue;
+            const Timed timed(*this, op, n);
+            bool worked = false;
+            std::optional<Layout> settled =
+                settleAndOffer(n, op, perturb(current, k, rng), rng, worked);
+            if (!settled) continue;
+
+            current = worked ? bestCopy(n) : std::move(*settled);
         }
+    }
+
+    // Settles a perturbed layout into the best square with a short squeeze, keeps it among the
+    // elites, and offers it, or else a squeeze of it into a smaller square. Returns the settled
+    // layout, or nothing if it couldn't be settled; `worked` says whether best[n] improved.
+    std::optional<Layout> settleAndOffer(int n, Op op, const Layout &perturbed,
+                                         std::mt19937_64 &rng, bool &worked) {
+        worked = false;
+        std::optional<Layout> settled =
+            squeezeInto(perturbed, bestSide(n), rng, cfg_.shakeItersPerTree);
+        if (!settled) return std::nullopt;
+
+        addElite(n, *settled);
+        worked =
+            offer(n, op, *settled) || offerIf(n, op, squeezeInto(*settled, squeezeTarget(n), rng));
+        return settled;
     }
 
     // The other parent for a crossover with best[n]: another elite, the best itself (turned

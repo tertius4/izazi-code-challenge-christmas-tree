@@ -3,11 +3,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <mutex>
 #include <numbers>
-#include <thread>
 
 #include "tree/tree.h"
+#include "util/parallel.h"
 
 namespace packer::packing {
 namespace {
@@ -304,21 +303,13 @@ std::vector<Crystal> findCrystals(int searches, long iterations, int keep, int t
 
     // Runs search(s) for s in [first, last) on the threads.
     auto runAll = [&](int first, int last, const auto &search) {
-        std::atomic<int> next{first};
-        auto worker = [&] {
-            for (int s = next++; s < last; s = next++) {
-                if (stop && stop->load()) return;
-                std::mt19937_64 rng(seed * 1000003ULL + static_cast<unsigned>(s));
-                found[static_cast<std::size_t>(s)] = search(s, rng);
-            }
-        };
-        std::vector<std::thread> pool;
-        for (int t = 0; t < std::max(1, threads); ++t) {
-            pool.emplace_back(worker);
-        }
-        for (std::thread &t : pool) {
-            t.join();
-        }
+        const auto count = static_cast<std::size_t>(last - first);
+        util::parallelFor(count, std::max(1, threads), [&](std::size_t k) {
+            if (stop && stop->load()) return;
+            const int s = first + static_cast<int>(k);
+            std::mt19937_64 rng(seed * 1000003ULL + static_cast<unsigned>(s));
+            found[static_cast<std::size_t>(s)] = search(s, rng);
+        });
     };
 
     // First from random cells. Bigger cells have more to arrange: give them longer.

@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <random>
 #include <sstream>
@@ -15,6 +16,7 @@
 #include "packing/lattice.h"
 #include "packing/rotation.h"
 #include "packing/starts.h"
+#include "util/parallel.h"
 
 namespace packer::packing {
 namespace {
@@ -49,11 +51,10 @@ bool sameCut(const LatticeParams &p, const LatticeParams &q) {
 // one that cuts best into a square, so keeping several pays off.
 std::vector<LatticeParams> findLattices(const SolverConfig &cfg) {
     std::vector<std::optional<LatticeParams>> found(cfg.latticeStarts);
-#pragma omp parallel for schedule(dynamic)
-    for (int k = 0; k < cfg.latticeStarts; ++k) {
+    util::parallelFor(found.size(), cfg.threads, [&](std::size_t k) {
         std::mt19937_64 rng(cfg.seed * 1000003ULL + k);
         found[k] = findLattice(cfg.latticeIters, rng);
-    }
+    });
 
     std::vector<LatticeParams> sorted;
     for (const auto &p : found) {
@@ -200,8 +201,8 @@ Solution solveAll(const SolverConfig &cfg) {
         order.push_back(n);
     }
 
-#pragma omp parallel for schedule(dynamic)
-    for (std::size_t k = 0; k < order.size(); ++k) {
+    std::mutex logMutex;
+    util::parallelFor(order.size(), cfg.threads, [&](std::size_t k) {
         const int n = order[k];
         std::mt19937_64 rng(cfg.seed + n);
 
@@ -234,10 +235,10 @@ Solution solveAll(const SolverConfig &cfg) {
             sol.origins[n] = "random (fallback)";
         }
 
-#pragma omp critical
+        const std::lock_guard lock(logMutex);
         std::cout << "[" << elapsed() << "s] n=" << n << " side=" << sol.layouts[n].side() << " ("
                   << sol.origins[n] << ")" << std::endl;
-    }
+    });
 
     // Neighbouring n help each other. Backward: n trees minus the worst tree can beat n-1.
     // Forward: n-1 trees plus a tree in a free spot can beat n. Each candidate is polished
@@ -249,20 +250,21 @@ Solution solveAll(const SolverConfig &cfg) {
         std::vector<std::string> how(cfg.maxN + 1);
 
         // Keeps a candidate layout for m trees if it beats the one kept so far.
+        std::mutex betterMutex;
         auto offer = [&](int m, Layout candidate, const std::string &origin) {
-#pragma omp critical(better)
-            {
-                std::optional<Layout> &kept = better[m];
-                const bool beatsKept = !kept || candidate.side() < kept->side();
-                if (beatsKept) {
-                    kept = std::move(candidate);
-                    how[m] = origin;
-                }
+            const std::lock_guard lock(betterMutex);
+            std::optional<Layout> &kept = better[m];
+            const bool beatsKept = !kept || candidate.side() < kept->side();
+            if (beatsKept) {
+                kept = std::move(candidate);
+                how[m] = origin;
             }
         };
 
-#pragma omp parallel for schedule(dynamic)
-        for (int n = cfg.maxN; n >= 2; --n) {
+        // n from maxN down to 2.
+        const std::size_t count = cfg.maxN >= 2 ? static_cast<std::size_t>(cfg.maxN - 1) : 0;
+        util::parallelFor(count, cfg.threads, [&](std::size_t k) {
+            const int n = cfg.maxN - static_cast<int>(k);
             std::mt19937_64 rng(cfg.seed * 7919ULL + n * 131ULL + pass);
             const double current = snapshot[n].side();
 
@@ -295,7 +297,7 @@ Solution solveAll(const SolverConfig &cfg) {
                     offer(n, std::move(*grown), origin);
                 }
             }
-        }
+        });
 
         bool changed = false;
         for (int n = 1; n <= cfg.maxN; ++n) {
