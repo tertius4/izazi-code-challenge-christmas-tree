@@ -102,5 +102,5 @@ This is what made the biggest difference.
 ## Days 3–5
 
 From Friday through the weekend, I let the program run non-stop.
-By Monday morning, the script was still slowly but surely improving (mostly through the squeeze algorithm), but I decided to stop it there, since I could barely use my computer while it ran. The final score was 70.126.
+By Monday morning, the script was still slowly but surely improving (mostly through the squeeze algorithm), but I decided to stop it there, since I could barely use my computer while it ran. The final score was 70.1165.
 According to the leaderboard of the "Santa 2025 – Christmas Tree Packing Challenge", I would have placed 89th out of 3,319 submissions.
