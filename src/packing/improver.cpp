@@ -45,8 +45,8 @@ constexpr std::size_t kOps = static_cast<std::size_t>(Op::Ruin) + 1;
 constexpr std::array<int, 6> kBands = {12, 30, 60, 100, 150, 200};
 
 std::size_t bandOf(int n) {
-    for (std::size_t b = 0; b < kBands.size(); ++b) {
-        if (n <= kBands[b]) return b;
+    for (std::size_t band = 0; band < kBands.size(); ++band) {
+        if (n <= kBands[band]) return band;
     }
     return kBands.size() - 1;
 }
@@ -97,16 +97,16 @@ struct Task {
 // Mixes the run seed with where we are, so every step gets its own random stream. Runs still
 // can't be repeated exactly: which n each thread works on, and on which best layout, depends
 // on timing.
-std::uint64_t mix(std::uint64_t seed, std::uint64_t a, std::uint64_t b, std::uint64_t c) {
-    std::uint64_t z = seed;
-    for (const std::uint64_t v : {a, b, c}) {
-        z += 0x9e3779b97f4a7c15ULL + v; // the splitmix64 finaliser
-        z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
-        z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
-        z ^= z >> 31;
+std::uint64_t mix(std::uint64_t seed, std::uint64_t visit, std::uint64_t n, std::uint64_t step) {
+    std::uint64_t hash = seed;
+    for (const std::uint64_t value : {visit, n, step}) {
+        hash += 0x9e3779b97f4a7c15ULL + value; // the splitmix64 finaliser
+        hash = (hash ^ (hash >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        hash = (hash ^ (hash >> 27)) * 0x94d049bb133111ebULL;
+        hash ^= hash >> 31;
     }
 
-    return z;
+    return hash;
 }
 
 // Shared state of a run. Everything below the mutex is guarded by it.
@@ -115,7 +115,7 @@ class Run {
     Run(std::vector<Layout> &best, std::vector<std::string> &origins, const ImproveConfig &cfg,
         std::atomic<bool> &stop, std::uint64_t seed)
         : best_(best), origins_(origins), cfg_(cfg), stop_(stop), seed_(seed), pick_(seed) {
-        const size_t count = best.size();
+        const std::size_t count = best.size();
         busy_.assign(count, false);
         shrink_.assign(count, cfg.squeezeStartShrink);
         elites_.assign(count, {});
@@ -138,7 +138,7 @@ class Run {
             if (task->op == Op::Visit) {
                 visit(*task);
             } else {
-                single(*task);
+                neighbourTry(*task);
             }
 
             std::lock_guard lock(mutex);
@@ -157,9 +157,9 @@ class Run {
     void printStats() const {
         printStats(stdout);
         if (cfg_.statsPath.empty()) return;
-        if (std::FILE *f = std::fopen(cfg_.statsPath.c_str(), "w")) {
-            printStats(f);
-            std::fclose(f);
+        if (std::FILE *file = std::fopen(cfg_.statsPath.c_str(), "w")) {
+            printStats(file);
+            std::fclose(file);
         }
     }
 
@@ -177,28 +177,28 @@ class Run {
         std::fprintf(out, "%-22s %8s %10s %6s %6s %10s %12s\n", "operator", "tries", "seconds",
                      "time", "wins", "gain", "gain/hour");
         for (const std::size_t k : order) {
-            const OpStats &s = all[k];
-            if (s.tries == 0) continue;
+            const OpStats &stats = all[k];
+            if (stats.tries == 0) continue;
             std::fprintf(out, "%-22s %8ld %10.0f %5.1f%% %6d %10.6f %12.6f\n",
-                         opName(static_cast<Op>(k)), s.tries, s.seconds,
-                         total > 0 ? 100 * s.seconds / total : 0.0, s.wins, s.gain,
-                         s.seconds > 0 ? 3600 * s.gain / s.seconds : 0.0);
+                         opName(static_cast<Op>(k)), stats.tries, stats.seconds,
+                         total > 0 ? 100 * stats.seconds / total : 0.0, stats.wins, stats.gain,
+                         stats.seconds > 0 ? 3600 * stats.gain / stats.seconds : 0.0);
         }
 
         std::fprintf(out, "\n%-22s", "gain/hour by n");
-        for (std::size_t b = 0; b < kBands.size(); ++b) {
-            const int lo = b == 0 ? 1 : kBands[b - 1] + 1;
+        for (std::size_t band = 0; band < kBands.size(); ++band) {
+            const int first = band == 0 ? 1 : kBands[band - 1] + 1;
             std::fprintf(out, " %9s",
-                         (std::to_string(lo) + "-" + std::to_string(kBands[b])).c_str());
+                         (std::to_string(first) + "-" + std::to_string(kBands[band])).c_str());
         }
         std::fprintf(out, "\n");
         for (const std::size_t k : order) {
             if (all[k].tries == 0) continue;
             std::fprintf(out, "%-22s", opName(static_cast<Op>(k)));
-            for (std::size_t b = 0; b < kBands.size(); ++b) {
-                const OpStats &s = stats_[b][k];
-                if (s.seconds > 0) {
-                    std::fprintf(out, " %9.6f", 3600 * s.gain / s.seconds);
+            for (std::size_t band = 0; band < kBands.size(); ++band) {
+                const OpStats &stats = stats_[band][k];
+                if (stats.seconds > 0) {
+                    std::fprintf(out, " %9.6f", 3600 * stats.gain / stats.seconds);
                 } else {
                     std::fprintf(out, " %9s", "-");
                 }
@@ -218,16 +218,17 @@ class Run {
     const std::uint64_t seed_;
     const Clock::time_point started_ = Clock::now();
 
-    std::vector<bool> busy_;     // n some thread is working on
-    std::vector<double> shrink_; // how much the next squeeze of each n tries to take off
-    std::vector<std::vector<Layout>> elites_;   // per n, the best few distinct layouts, smallest first
+    // Per n, the best few distinct layouts, smallest first.
+    std::vector<std::vector<Layout>> elites_;
+    std::vector<bool> busy_;      // n some thread is working on
+    std::vector<double> shrink_;  // how much the next squeeze of each n tries to take off
     std::vector<double> seconds_; // per n, time spent on it this run
     std::vector<double> gain_;    // per n, score gained this run
     std::vector<int> visits_;     // per n, tasks started this run
     std::deque<Task> urgent_;     // neighbour tries set off by an improvement
     std::mt19937_64 pick_;        // for choosing between the sweep and the rates
     int cursor_ = 0;              // the next n the sweep visits
-    int pass_ = 1;
+    int pass_ = 1;                // the sweep's number, counted from 1
 
     struct OpStats {
         long tries = 0;
@@ -257,11 +258,11 @@ class Run {
         Timed(Run &run, Op op, int n) : run_(run), op_(op), band_(bandOf(n)), began_(Clock::now()) {
         }
         ~Timed() {
-            const double s = std::chrono::duration<double>(Clock::now() - began_).count();
+            const double seconds = std::chrono::duration<double>(Clock::now() - began_).count();
             std::lock_guard lock(run_.mutex);
-            OpStats &st = run_.stats_[band_][static_cast<std::size_t>(op_)];
-            ++st.tries;
-            st.seconds += s;
+            OpStats &stats = run_.stats_[band_][static_cast<std::size_t>(op_)];
+            ++stats.tries;
+            stats.seconds += seconds;
         }
         Timed(const Timed &) = delete;
         Timed &operator=(const Timed &) = delete;
@@ -291,10 +292,10 @@ class Run {
 
         // One round through the urgent queue: tries for a busy n go back for later.
         for (std::size_t k = urgent_.size(); k-- > 0;) {
-            const Task t = urgent_.front();
+            const Task queued = urgent_.front();
             urgent_.pop_front();
-            if (!busy_[t.n]) return start(t.n, t.op);
-            urgent_.push_back(t);
+            if (!busy_[queued.n]) return start(queued.n, queued.op);
+            urgent_.push_back(queued);
         }
 
         const bool byRate = std::uniform_real_distribution<double>(0, 1)(pick_) < cfg_.banditShare;
@@ -325,17 +326,17 @@ class Run {
         const double prior = cfg_.banditPriorSeconds;
 
         std::uniform_real_distribution<double> tiny(0, 1e-15);
-        int best = 0;
-        double bestRate = -1;
+        int bestN = 0;
+        double highest = -1;
         for (int n = firstN(); n <= cfg_.maxN; ++n) {
             if (busy_[n]) continue;
             const double rate = (gain_[n] + average * prior) / (seconds_[n] + prior) + tiny(pick_);
-            if (rate > bestRate) {
-                bestRate = rate;
-                best = n;
+            if (rate > highest) {
+                highest = rate;
+                bestN = n;
             }
         }
-        return best;
+        return bestN;
     }
 
     void advance() {
@@ -359,40 +360,40 @@ class Run {
     }
 
     void anneal(Layout &layout, long itersPerTree, double temp, double step, std::mt19937_64 &rng) {
-        AnnealConfig ac;
-        ac.iterations = itersPerTree * static_cast<long>(layout.size());
-        ac.startTemp = temp;
-        ac.startStep = step;
-        ac.stop = &stop_;
+        AnnealConfig annealCfg;
+        annealCfg.iterations = itersPerTree * static_cast<long>(layout.size());
+        annealCfg.startTemp = temp;
+        annealCfg.startStep = step;
+        annealCfg.stop = &stop_;
 
-        packing::anneal(layout, ac, rng);
+        packing::anneal(layout, annealCfg, rng);
         rotateWhole(layout);
     }
 
     SqueezeConfig squeezeConfig(const Layout &layout, long itersPerTree = 0) const {
-        SqueezeConfig sc;
+        SqueezeConfig squeezeCfg;
         if (itersPerTree == 0) itersPerTree = cfg_.squeezeItersPerTree;
-        sc.iterations = itersPerTree * static_cast<long>(layout.size());
-        sc.relaxIters = cfg_.squeezeRelaxIters;
-        sc.glsRounds = cfg_.squeezeGlsRounds;
-        sc.lineShare = cfg_.squeezeLineShare;
-        sc.stop = &stop_;
-        return sc;
+        squeezeCfg.iterations = itersPerTree * static_cast<long>(layout.size());
+        squeezeCfg.relaxIters = cfg_.squeezeRelaxIters;
+        squeezeCfg.glsRounds = cfg_.squeezeGlsRounds;
+        squeezeCfg.lineShare = cfg_.squeezeLineShare;
+        squeezeCfg.stop = &stop_;
+        return squeezeCfg;
     }
 
     CompressConfig compressConfig() const {
-        CompressConfig cc;
-        cc.iterations = cfg_.compressIters;
-        cc.rounds = cfg_.compressRounds;
-        cc.stop = &stop_;
-        return cc;
+        CompressConfig compressCfg;
+        compressCfg.iterations = cfg_.compressIters;
+        compressCfg.rounds = cfg_.compressRounds;
+        compressCfg.stop = &stop_;
+        return compressCfg;
     }
 
-    std::optional<Layout> squeezeWith(const Layout &layout, double target, const SqueezeConfig &sc,
-                                      std::mt19937_64 &rng) {
-        std::optional<Layout> l = squeeze(layout, target, sc, rng);
-        if (l) rotateWhole(*l);
-        return l;
+    std::optional<Layout> squeezeWith(const Layout &layout, double target,
+                                      const SqueezeConfig &squeezeCfg, std::mt19937_64 &rng) {
+        std::optional<Layout> squeezed = squeeze(layout, target, squeezeCfg, rng);
+        if (squeezed) rotateWhole(*squeezed);
+        return squeezed;
     }
 
     std::optional<Layout> squeezeInto(const Layout &layout, double target, std::mt19937_64 &rng,
@@ -413,38 +414,38 @@ class Run {
 
     void adaptShrink(int n, bool worked) {
         std::lock_guard lock(mutex);
-        const double s = worked ? shrink_[n] * 2 : shrink_[n] / 2;
-        shrink_[n] = std::clamp(s, cfg_.squeezeStartShrink / 64, cfg_.squeezeMaxShrink);
+        const double next = worked ? shrink_[n] * 2 : shrink_[n] / 2;
+        shrink_[n] = std::clamp(next, cfg_.squeezeStartShrink / 64, cfg_.squeezeMaxShrink);
     }
 
     // Keeps a valid layout among n's elites if it is close enough to the best and new.
-    void addEliteLocked(int n, const Layout &l) {
+    void addEliteLocked(int n, const Layout &layout) {
         if (cfg_.eliteSize <= 0) return;
-        const double side = l.side();
+        const double side = layout.side();
         if (side > best_[n].side() * (1 + cfg_.eliteSlack)) return;
 
         std::vector<Layout> &pool = elites_[n];
         // Different layouts practically never share a side to 1e-10: same side, same layout.
-        auto same = [&](const Layout &e) { return std::abs(e.side() - side) < 1e-10; };
+        auto same = [&](const Layout &elite) { return std::abs(elite.side() - side) < 1e-10; };
         if (std::any_of(pool.begin(), pool.end(), same)) return;
 
-        pool.push_back(l);
+        pool.push_back(layout);
         std::sort(pool.begin(), pool.end(),
                   [](const Layout &a, const Layout &b) { return a.side() < b.side(); });
         if (static_cast<int>(pool.size()) > cfg_.eliteSize) pool.pop_back();
     }
 
-    void addElite(int n, const Layout &l) {
+    void addElite(int n, const Layout &layout) {
         std::lock_guard lock(mutex);
-        addEliteLocked(n, l);
+        addEliteLocked(n, layout);
     }
 
     // A random elite of n other than the best itself, if there is one.
     std::optional<Layout> otherElite(int n, std::mt19937_64 &rng) {
         std::lock_guard lock(mutex);
         std::vector<const Layout *> others;
-        for (const Layout &e : elites_[n]) {
-            if (std::abs(e.side() - best_[n].side()) >= 1e-10) others.push_back(&e);
+        for (const Layout &elite : elites_[n]) {
+            if (std::abs(elite.side() - best_[n].side()) >= 1e-10) others.push_back(&elite);
         }
         if (others.empty()) return std::nullopt;
         return *others[std::uniform_int_distribution<std::size_t>(0, others.size() - 1)(rng)];
@@ -457,17 +458,17 @@ class Run {
         double chance = 1;
         {
             std::lock_guard lock(mutex);
-            auto rateOf = [&](const std::array<OpStats, kOps> &st, double &average) {
+            auto rateOf = [&](const std::array<OpStats, kOps> &allOps, double &average) {
                 double gained = 0, spent = 0;
-                for (const OpStats &s : st) {
-                    gained += s.gain;
-                    spent += s.seconds;
+                for (const OpStats &stats : allOps) {
+                    gained += stats.gain;
+                    spent += stats.seconds;
                 }
                 if (gained <= 0 || spent <= 0) return false;
                 average = gained / spent;
                 const double prior = cfg_.opPriorSeconds;
-                const OpStats &s = st[static_cast<std::size_t>(op)];
-                chance = (s.gain + average * prior) / (s.seconds + prior) / average;
+                const OpStats &stats = allOps[static_cast<std::size_t>(op)];
+                chance = (stats.gain + average * prior) / (stats.seconds + prior) / average;
                 return true;
             };
             double average = 0;
@@ -480,24 +481,25 @@ class Run {
 
     // Squeezes into ever smaller squares while that works, offering every success. Returns
     // the smallest layout reached.
-    Layout descend(int n, Op op, Layout l, int tries, std::mt19937_64 &rng,
+    Layout descend(int n, Op op, Layout layout, int tries, std::mt19937_64 &rng,
                    bool symmetric = false) {
         double shrink = 4e-3;
         for (int k = 0; k < tries && !stop_.load(); ++k) {
-            SqueezeConfig sc = squeezeConfig(l);
-            sc.symmetric = symmetric;
-            std::optional<Layout> r = squeezeWith(l, l.side() * (1 - shrink), sc, rng);
-            if (r) {
-                l = std::move(*r);
-                offer(n, op, l);
-                addElite(n, l);
+            SqueezeConfig squeezeCfg = squeezeConfig(layout);
+            squeezeCfg.symmetric = symmetric;
+            std::optional<Layout> squeezed =
+                squeezeWith(layout, layout.side() * (1 - shrink), squeezeCfg, rng);
+            if (squeezed) {
+                layout = std::move(*squeezed);
+                offer(n, op, layout);
+                addElite(n, layout);
                 shrink = std::min(shrink * 1.5, 1e-2);
             } else {
                 shrink /= 3;
                 if (shrink < 1e-5) break;
             }
         }
-        return l;
+        return layout;
     }
 
     // Every operator on n once, in order. `step` numbers the random streams they draw, so
@@ -531,9 +533,9 @@ class Run {
             std::mt19937_64 rng = rngFor(task, step++);
             if (!worth(Op::Remove, n, rng)) continue;
             const Timed timed(*this, Op::Remove, n);
-            Layout l = from;
-            l.remove(order[k]);
-            offerIf(n, Op::Remove, squeezeInto(l, squeezeTarget(n), rng));
+            Layout layout = from;
+            layout.remove(order[k]);
+            offerIf(n, Op::Remove, squeezeInto(layout, squeezeTarget(n), rng));
         }
     }
 
@@ -567,11 +569,12 @@ class Run {
         if (stop_.load() || !worth(Op::Border, n, rng)) return;
 
         const Timed timed(*this, Op::Border, n);
-        const Layout b = bestCopy(n);
-        SqueezeConfig sc = squeezeConfig(b);
-        sc.movable = borderTrees(b, cfg_.borderWidth);
-        const bool hasInside = std::count(sc.movable.begin(), sc.movable.end(), false) > 0;
-        if (hasInside) offerIf(n, Op::Border, squeezeWith(b, squeezeTarget(n), sc, rng));
+        const Layout best = bestCopy(n);
+        SqueezeConfig squeezeCfg = squeezeConfig(best);
+        squeezeCfg.movable = borderTrees(best, cfg_.borderWidth);
+        const auto &movable = squeezeCfg.movable;
+        const bool hasInside = std::count(movable.begin(), movable.end(), false) > 0;
+        if (hasInside) offerIf(n, Op::Border, squeezeWith(best, squeezeTarget(n), squeezeCfg, rng));
     }
 
     // The side as a variable: the walls close in as far as the trees let them. Each win is the
@@ -583,15 +586,16 @@ class Run {
             std::mt19937_64 rng = rngFor(task, step++);
             if (!worth(Op::Compress, n, rng)) break;
             const Timed timed(*this, Op::Compress, n);
-            Layout c = bestCopy(n);
-            CompressConfig cc = compressConfig();
+            Layout compressed = bestCopy(n);
+            CompressConfig compressCfg = compressConfig();
             if (k % 2 == 1) {
-                cc.iterations *= 2;
-                cc.rounds *= 2;
+                compressCfg.iterations *= 2;
+                compressCfg.rounds *= 2;
             }
-            const double side = compress(c, cc);
-            const bool worked = side < bestSide(n) &&
-                                offerIf(n, Op::Compress, squeezeInto(c, side * (1 + 1e-7), rng));
+            const double side = compress(compressed, compressCfg);
+            const bool worked =
+                side < bestSide(n) &&
+                offerIf(n, Op::Compress, squeezeInto(compressed, side * (1 + 1e-7), rng));
             failures = worked ? 0 : failures + 1;
         }
     }
@@ -612,10 +616,10 @@ class Run {
             std::mt19937_64 rng = rngFor(task, step++);
             if (!worth(Op::Crossover, n, rng)) continue;
             const Timed timed(*this, Op::Crossover, n);
-            const Layout a = bestCopy(n);
-            const Layout b = partnerFor(n, rng);
+            const Layout best = bestCopy(n);
+            const Layout partner = partnerFor(n, rng);
             bool worked = false;
-            settleAndOffer(n, Op::Crossover, crossover(a, b, n, rng), rng, worked);
+            settleAndOffer(n, Op::Crossover, crossover(best, partner, n, rng), rng, worked);
         }
     }
 
@@ -646,22 +650,23 @@ class Run {
 
         const Timed timed(*this, Op::Crystal, n);
         const std::size_t which = static_cast<std::size_t>(task.visit) % cfg_.crystals.size();
-        const Crystal &c = cfg_.crystals[which];
-        Layout cut = bestCrystalCut(c, n, cfg_.crystalAngles, rng).first;
+        const Crystal &crystal = cfg_.crystals[which];
+        Layout cut = bestCrystalCut(crystal, n, cfg_.crystalAngles, rng).first;
         offer(n, Op::Crystal, cut);
 
-        CompressConfig cc = compressConfig();
-        cc.movable = borderTrees(cut, cfg_.borderWidth);
-        compress(cut, cc);
-        cc.movable.clear();
-        const double side = compress(cut, cc);
-        std::optional<Layout> r = squeezeInto(cut, side * (1 + 1e-7), rng, cfg_.shakeItersPerTree);
-        if (!r || stop_.load()) return;
+        CompressConfig compressCfg = compressConfig();
+        compressCfg.movable = borderTrees(cut, cfg_.borderWidth);
+        compress(cut, compressCfg);
+        compressCfg.movable.clear();
+        const double side = compress(cut, compressCfg);
+        std::optional<Layout> squeezed =
+            squeezeInto(cut, side * (1 + 1e-7), rng, cfg_.shakeItersPerTree);
+        if (!squeezed || stop_.load()) return;
 
-        offer(n, Op::Crystal, *r);
-        addElite(n, *r); // a different arrangement: a good crossover partner
-        if (r->side() < bestSide(n) * (1 + cfg_.crystalSlack)) {
-            descend(n, Op::Crystal, *r, cfg_.crystalDescent, rng);
+        offer(n, Op::Crystal, *squeezed);
+        addElite(n, *squeezed); // a different arrangement: a good crossover partner
+        if (squeezed->side() < bestSide(n) * (1 + cfg_.crystalSlack)) {
+            descend(n, Op::Crystal, *squeezed, cfg_.crystalDescent, rng);
         }
     }
 
@@ -680,19 +685,19 @@ class Run {
             if (!worth(op, n, rng)) continue;
             const Timed timed(*this, op, n);
             const double roomy = 1.3 * bestSide(n);
-            Layout l = symmetric ? symmetricStart(n, roomy, rng) : denseStart(n, roomy, rng);
+            Layout start = symmetric ? symmetricStart(n, roomy, rng) : denseStart(n, roomy, rng);
 
-            CompressConfig cc = compressConfig();
-            cc.symmetric = symmetric;
-            const double side = compress(l, cc);
-            SqueezeConfig sc = squeezeConfig(l);
-            sc.symmetric = symmetric;
-            sc.glsRounds = cfg_.denseGlsRounds;
-            std::optional<Layout> r = squeezeWith(l, side * (1 + 1e-6), sc, rng);
-            if (!r) continue;
-            offer(n, op, *r);
-            if (r->side() < bestSide(n) * (1 + cfg_.denseSlack)) {
-                descend(n, op, *r, cfg_.denseDescent, rng, symmetric);
+            CompressConfig compressCfg = compressConfig();
+            compressCfg.symmetric = symmetric;
+            const double side = compress(start, compressCfg);
+            SqueezeConfig squeezeCfg = squeezeConfig(start);
+            squeezeCfg.symmetric = symmetric;
+            squeezeCfg.glsRounds = cfg_.denseGlsRounds;
+            std::optional<Layout> squeezed = squeezeWith(start, side * (1 + 1e-6), squeezeCfg, rng);
+            if (!squeezed) continue;
+            offer(n, op, *squeezed);
+            if (squeezed->side() < bestSide(n) * (1 + cfg_.denseSlack)) {
+                descend(n, op, *squeezed, cfg_.denseDescent, rng, symmetric);
             }
         }
     }
@@ -701,22 +706,23 @@ class Run {
     // tree into a hole, which a squeeze can't; the squeeze then takes up the room.
     void refineWalk(const Task &task, int &step) {
         const int n = task.n;
-        Layout walk = bestCopy(n);
+        Layout current = bestCopy(n);
         for (int k = 0; k < cfg_.refineTries && !stop_.load(); ++k) {
             std::mt19937_64 rng = rngFor(task, step++);
             if (!worth(Op::Refine, n, rng)) continue;
             const Timed timed(*this, Op::Refine, n);
             const double temp =
                 cfg_.refineTemps[static_cast<std::size_t>(k) % cfg_.refineTemps.size()];
-            Layout l = walk;
-            anneal(l, cfg_.refineItersPerTree, temp, cfg_.refineStep, rng);
-            const bool worked = offer(n, Op::Refine, l);
-            std::optional<Layout> r = squeezeInto(l, squeezeTarget(n), rng);
-            if (offerIf(n, Op::Refine, r) || worked) {
-                walk = bestCopy(n);
-            } else if (l.isValid() && l.side() <= bestSide(n) * (1 + cfg_.eliteSlack)) {
-                addElite(n, l);
-                walk = std::move(l); // as good as the best, near enough: walk on from it
+            Layout annealed = current;
+            anneal(annealed, cfg_.refineItersPerTree, temp, cfg_.refineStep, rng);
+            const bool worked = offer(n, Op::Refine, annealed);
+            std::optional<Layout> squeezed = squeezeInto(annealed, squeezeTarget(n), rng);
+            if (offerIf(n, Op::Refine, squeezed) || worked) {
+                current = bestCopy(n);
+            } else if (annealed.isValid() &&
+                       annealed.side() <= bestSide(n) * (1 + cfg_.eliteSlack)) {
+                addElite(n, annealed);
+                current = std::move(annealed); // as good as the best, near enough: walk on from it
             }
         }
     }
@@ -729,9 +735,9 @@ class Run {
         if (!randomTurn || stop_.load() || !worth(Op::Random, n, rng)) return;
 
         const Timed timed(*this, Op::Random, n);
-        Layout l = randomStart(n, rng);
-        anneal(l, cfg_.randomItersPerTree, cfg_.randomTemp, cfg_.randomStep, rng);
-        offer(n, Op::Random, std::move(l));
+        Layout layout = randomStart(n, rng);
+        anneal(layout, cfg_.randomItersPerTree, cfg_.randomTemp, cfg_.randomStep, rng);
+        offer(n, Op::Random, std::move(layout));
     }
 
     // A walk through arrangements as good as the best: each try perturbs the current layout
@@ -773,18 +779,18 @@ class Run {
     // The other parent for a crossover with best[n]: another elite, the best itself (turned
     // by crossover()), or a neighbour n±1 (crossover() fixes the count).
     Layout partnerFor(int n, std::mt19937_64 &rng) {
-        const double r = std::uniform_real_distribution<double>(0.0, 1.0)(rng);
-        if (r < 0.5) {
-            if (std::optional<Layout> e = otherElite(n, rng)) return *e;
+        const double roll = std::uniform_real_distribution<double>(0.0, 1.0)(rng);
+        if (roll < 0.5) {
+            if (std::optional<Layout> elite = otherElite(n, rng)) return *elite;
         }
-        if (r < 0.8) return bestCopy(n);
+        if (roll < 0.8) return bestCopy(n);
 
-        const bool up = n + 1 < static_cast<int>(best_.size()) && (r < 0.9 || n - 1 < 1);
+        const bool up = n + 1 < static_cast<int>(best_.size()) && (roll < 0.9 || n - 1 < 1);
         return bestCopy(up ? n + 1 : n - 1);
     }
 
-    // One neighbour try.
-    void single(const Task &task) {
+    // One neighbour try: n from n+1 minus a tree, or from n-1 plus one.
+    void neighbourTry(const Task &task) {
         const int n = task.n;
         const Timed timed(*this, task.op, n);
         std::mt19937_64 rng = rngFor(task, 1000 + static_cast<int>(task.op));
@@ -793,8 +799,8 @@ class Run {
             const bool hasBiggerN = n + 1 < static_cast<int>(best_.size());
             if (!hasBiggerN) return;
 
-            const Layout l = withoutTree(bestCopy(n + 1));
-            offerIf(n, Op::Remove, squeezeInto(l, squeezeTarget(n), rng));
+            const Layout layout = withoutTree(bestCopy(n + 1));
+            offerIf(n, Op::Remove, squeezeInto(layout, squeezeTarget(n), rng));
         } else if (task.op == Op::Add) {
             offerIf(n, Op::Add, addAndSqueeze(n, rng));
         }
@@ -804,24 +810,24 @@ class Run {
     // best[n]'s. Half the time the tree goes to the best spot (see bestInsertion()), half the
     // time anywhere.
     std::optional<Layout> addAndSqueeze(int n, std::mt19937_64 &rng) {
-        Layout l = bestCopy(n - 1);
+        Layout layout = bestCopy(n - 1);
         const double target = squeezeTarget(n);
         std::uniform_real_distribution<double> unit(0.0, 1.0);
-        const Box b = l.bounds();
+        const Box bounds = layout.bounds();
         if (unit(rng) < 0.5) {
             const Box square =
-                geometry::squareAround(geometry::centre(b), std::max(target, l.side()));
-            l.add(bestInsertion(l, square, 8, rng));
+                geometry::squareAround(geometry::centre(bounds), std::max(target, layout.side()));
+            layout.add(bestInsertion(layout, square, 8, rng));
         } else {
-            l.add({b.minX + unit(rng) * (b.maxX - b.minX), b.minY + unit(rng) * (b.maxY - b.minY),
-                   360.0 * unit(rng)});
+            layout.add({bounds.minX + unit(rng) * (bounds.maxX - bounds.minX),
+                        bounds.minY + unit(rng) * (bounds.maxY - bounds.minY), 360.0 * unit(rng)});
         }
 
-        return squeezeInto(l, target, rng);
+        return squeezeInto(layout, target, rng);
     }
 
-    bool offerIf(int n, Op op, std::optional<Layout> l) {
-        return l && offer(n, op, std::move(*l));
+    bool offerIf(int n, Op op, std::optional<Layout> layout) {
+        return layout && offer(n, op, std::move(*layout));
     }
 
     // Replaces best[n] if the layout is valid and smaller. Returns whether it did.
@@ -840,9 +846,9 @@ class Run {
         origins_[n] = opName(op);
         const double gain = (before * before - after * after) / n;
         gain_[n] += gain;
-        OpStats &st = stats_[bandOf(n)][static_cast<std::size_t>(op)];
-        ++st.wins;
-        st.gain += gain;
+        OpStats &stats = stats_[bandOf(n)][static_cast<std::size_t>(op)];
+        ++stats.wins;
+        stats.gain += gain;
         addEliteLocked(n, best_[n]);
 
         std::printf("[%5.0fs] n=%-3d %.6f -> %.6f  (%s)  score %.6f\n", elapsed(), n,
@@ -858,17 +864,6 @@ class Run {
     }
 };
 } // namespace
-
-double totalScore(const std::vector<Layout> &layouts) {
-    double total = 0;
-
-    for (std::size_t n = 1; n < layouts.size(); ++n) {
-        const double s = layouts[n].side();
-        total += s * s / static_cast<double>(n);
-    }
-
-    return total;
-}
 
 void improve(std::vector<Layout> &best, std::vector<std::string> &origins, const ImproveConfig &cfg,
              std::atomic<bool> &stop, const SaveFn &save) {

@@ -9,7 +9,7 @@
 
 using namespace packer;
 
-TEST(Submission, KaggleFormat) {
+TEST(Submission, Format) {
     std::vector<packing::Layout> layouts(3);
     layouts[1].add({0, 0, 0});
     layouts[2].add({0, 0, 0});
@@ -39,9 +39,9 @@ TEST(Submission, LoadsWhatItWrites) {
 }
 
 TEST(Crystals, LoadsWhatItWrites) {
-    packing::Crystal a{{1.25, 0}, {0.3, 0.9}, {{0, 0, 10}, {0.5, 0.25, 190}}};
-    packing::Crystal b{{0.7, 0.1}, {-0.2, 1.1}, {{0, 0, 1.0 / 3}}};
-    const auto loaded = io::loadCrystals(io::crystalTable({a, b}));
+    packing::Crystal twoTrees{{1.25, 0}, {0.3, 0.9}, {{0, 0, 10}, {0.5, 0.25, 190}}};
+    packing::Crystal oneTree{{0.7, 0.1}, {-0.2, 1.1}, {{0, 0, 1.0 / 3}}};
+    const auto loaded = io::loadCrystals(io::crystalTable({twoTrees, oneTree}));
     ASSERT_EQ(loaded.size(), 2u);
     ASSERT_EQ(loaded[0].cell.size(), 2u);
     ASSERT_EQ(loaded[1].cell.size(), 1u);

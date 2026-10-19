@@ -8,8 +8,8 @@ namespace packer::geometry {
 inline constexpr double kEps = 1e-13;
 
 // Only used by the tests, as an independent check of tree::collide.
-// True if p is strictly inside poly (even-odd ray casting).
-bool pointInPolygon(const Point &p, const Polygon &poly);
+// True if the point is strictly inside poly (even-odd ray casting).
+bool pointInPolygon(const Point &point, const Polygon &poly);
 
 // Only used by the tests, as an independent check of tree::collide.
 // True if the polygons overlap or touch. Pass each polygon's bounding box so the

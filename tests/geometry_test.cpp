@@ -15,9 +15,9 @@ bool collide(const Polygon &a, const Polygon &b) {
 } // namespace
 
 TEST(Geometry, RotatesCounterClockwiseThenTranslates) {
-    const Polygon p = transform({{1, 0}}, {2, 3, 90});
-    EXPECT_NEAR(p[0].x, 2, 1e-12);
-    EXPECT_NEAR(p[0].y, 4, 1e-12);
+    const Polygon moved = transform({{1, 0}}, {2, 3, 90});
+    EXPECT_NEAR(moved[0].x, 2, 1e-12);
+    EXPECT_NEAR(moved[0].y, 4, 1e-12);
 }
 
 TEST(Geometry, SquareArea) {

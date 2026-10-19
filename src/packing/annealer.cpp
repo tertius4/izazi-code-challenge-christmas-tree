@@ -8,8 +8,8 @@
 namespace packer::packing {
 namespace {
 // How far a tree's box reaches from the centre (cx, cy), along x or y.
-double reach(const Box &t, double cx, double cy) {
-    return std::max({t.maxX - cx, cx - t.minX, t.maxY - cy, cy - t.minY});
+double reach(const Box &box, double cx, double cy) {
+    return std::max({box.maxX - cx, cx - box.minX, box.maxY - cy, cy - box.minY});
 }
 
 // The square side, plus a small reward for trees sitting near the centre. The pull opens up
@@ -22,36 +22,37 @@ struct Energy {
 };
 
 Energy measure(const Layout &layout, double pullWeight) {
-    Energy e;
-    e.box = layout.bounds();
-    const auto [cx, cy] = geometry::centre(e.box);
-    for (const Box &t : layout.boxes) {
-        e.pull += reach(t, cx, cy);
+    Energy energy;
+    energy.box = layout.bounds();
+    const auto [cx, cy] = geometry::centre(energy.box);
+    for (const Box &box : layout.boxes) {
+        energy.pull += reach(box, cx, cy);
     }
 
-    e.side = std::max(e.box.maxX - e.box.minX, e.box.maxY - e.box.minY);
-    e.value = e.side + pullWeight * e.pull / static_cast<double>(layout.size());
+    energy.side = std::max(energy.box.maxX - energy.box.minX, energy.box.maxY - energy.box.minY);
+    energy.value = energy.side + pullWeight * energy.pull / static_cast<double>(layout.size());
 
-    return e;
+    return energy;
 }
 
-bool strictlyInside(const Box &t, const Box &b) {
-    return t.minX > b.minX && t.maxX < b.maxX && t.minY > b.minY && t.maxY < b.maxY;
+bool strictlyInside(const Box &inner, const Box &outer) {
+    return inner.minX > outer.minX && inner.maxX < outer.maxX && inner.minY > outer.minY &&
+           inner.maxY < outer.maxY;
 }
 
 // The energy after one tree's box changed from `before` to `after`. Most moves stay clear of
 // the edge, so the box and its centre stay put and only that tree's pull changes. Anything
 // else is measured from scratch.
-Energy afterMove(const Energy &e, const Box &before, const Box &after, const Layout &layout,
+Energy afterMove(const Energy &energy, const Box &before, const Box &after, const Layout &layout,
                  double pullWeight) {
-    const bool wasInside = strictlyInside(before, e.box);
-    const bool isInside = strictlyInside(after, e.box);
+    const bool wasInside = strictlyInside(before, energy.box);
+    const bool isInside = strictlyInside(after, energy.box);
     if (!wasInside || !isInside) {
         return measure(layout, pullWeight);
     }
 
-    const auto [cx, cy] = geometry::centre(e.box);
-    Energy next = e;
+    const auto [cx, cy] = geometry::centre(energy.box);
+    Energy next = energy;
     next.pull += reach(after, cx, cy) - reach(before, cx, cy);
     next.value = next.side + pullWeight * next.pull / static_cast<double>(layout.size());
 
@@ -95,55 +96,56 @@ void anneal(Layout &layout, const AnnealConfig &cfg, std::mt19937_64 &rng) {
         if (checkStop && cfg.stop->load(std::memory_order_relaxed)) break;
 
         // Progress 0 -> 1. Temperature and step size shrink geometrically.
-        const double t = static_cast<double>(it) / cfg.iterations;
-        const double temp = cfg.startTemp * std::pow(cfg.endTemp / cfg.startTemp, t);
-        const double step = cfg.startStep * std::pow(cfg.endStep / cfg.startStep, t);
+        const double progress = static_cast<double>(it) / cfg.iterations;
+        const double temp = cfg.startTemp * std::pow(cfg.endTemp / cfg.startTemp, progress);
+        const double step = cfg.startStep * std::pow(cfg.endStep / cfg.startStep, progress);
 
         undo.clear();
-        const Box b = current.box;
-        const auto [cx, cy] = geometry::centre(b);
-        const double r = unit(rng);
+        const Box bounds = current.box;
+        const auto [cx, cy] = geometry::centre(bounds);
+        const double roll = unit(rng); // picks the kind of move
         bool legal = false;
         bool single = false; // a one-tree move: tree `i`, whose box was `before`
         std::size_t i = 0;
         Box before{};
 
-        if (r < cfg.squeezeShare) {
+        if (roll < cfg.squeezeShare) {
             // Squeeze: pull every tree toward the centre at once, keeping the angles.
-            const double side = std::max(b.maxX - b.minX, b.maxY - b.minY);
-            const double f = 1 - step * unit(rng) / side;
+            const double side = std::max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
+            const double scale = 1 - step * unit(rng) / side;
 
             for (std::size_t k = 0; k < layout.size(); ++k) {
-                const Pose p = layout.poses[k];
-                moveTree(k, {cx + (p.x - cx) * f, cy + (p.y - cy) * f, p.deg});
+                const Pose pose = layout.poses[k];
+                moveTree(k, {cx + (pose.x - cx) * scale, cy + (pose.y - cy) * scale, pose.deg});
             }
 
             legal = !layout.anyCollision();
         } else {
             Pose moved;
-            if (r < relocateEnd) {
+            if (roll < relocateEnd) {
                 // Only trees on the edge decide the side, so work on those.
                 const std::vector<std::size_t> edge = layout.edgeTrees();
                 i = edge[std::uniform_int_distribution<std::size_t>(0, edge.size() - 1)(rng)];
                 moved = layout.poses[i];
 
-                if (r < edgeEnd) {
+                if (roll < edgeEnd) {
                     // Edge push: a small step toward the centre, with a small turn.
                     const double dx = cx - moved.x;
                     const double dy = cy - moved.y;
                     const double len = std::hypot(dx, dy);
 
                     if (len > 0) {
-                        const double d = step * unit(rng);
-                        moved.x += d * dx / len;
-                        moved.y += d * dy / len;
+                        const double dist = step * unit(rng);
+                        moved.x += dist * dx / len;
+                        moved.y += dist * dy / len;
                     }
 
                     moved.deg += jiggle(30 * step);
                 } else {
                     // Relocate: drop it at a random spot and angle inside the square.
-                    moved = {b.minX + unit(rng) * (b.maxX - b.minX),
-                             b.minY + unit(rng) * (b.maxY - b.minY), 360 * unit(rng)};
+                    moved = {bounds.minX + unit(rng) * (bounds.maxX - bounds.minX),
+                             bounds.minY + unit(rng) * (bounds.maxY - bounds.minY),
+                             360 * unit(rng)};
                 }
             } else {
                 i = pickTree(rng);

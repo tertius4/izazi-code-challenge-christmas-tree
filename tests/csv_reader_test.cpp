@@ -10,59 +10,59 @@ using Rows = std::vector<std::vector<std::string>>;
 class CsvReaderTest : public TempDirTest {};
 
 TEST_F(CsvReaderTest, ParsesSimpleRows) {
-    const auto p = writeFile("a.csv", "a,b,c\n1,2,3\n");
-    EXPECT_EQ(readCsv(p), (Rows{{"a", "b", "c"}, {"1", "2", "3"}}));
+    const auto file = writeFile("a.csv", "a,b,c\n1,2,3\n");
+    EXPECT_EQ(readCsv(file), (Rows{{"a", "b", "c"}, {"1", "2", "3"}}));
 }
 
 TEST_F(CsvReaderTest, QuotedFieldKeepsComma) {
-    const auto p = writeFile("a.csv", "\"x,y\",z\n");
-    EXPECT_EQ(readCsv(p), (Rows{{"x,y", "z"}}));
+    const auto file = writeFile("a.csv", "\"x,y\",z\n");
+    EXPECT_EQ(readCsv(file), (Rows{{"x,y", "z"}}));
 }
 
 TEST_F(CsvReaderTest, DoubledQuotesBecomeOneQuote) {
-    const auto p = writeFile("a.csv", "\"say \"\"hi\"\"\",b\n");
-    EXPECT_EQ(readCsv(p), (Rows{{"say \"hi\"", "b"}}));
+    const auto file = writeFile("a.csv", "\"say \"\"hi\"\"\",b\n");
+    EXPECT_EQ(readCsv(file), (Rows{{"say \"hi\"", "b"}}));
 }
 
 TEST_F(CsvReaderTest, NewlineInsideQuotesStaysInField) {
-    const auto p = writeFile("a.csv", "\"line1\nline2\",b\nc,d\n");
-    EXPECT_EQ(readCsv(p), (Rows{{"line1\nline2", "b"}, {"c", "d"}}));
+    const auto file = writeFile("a.csv", "\"line1\nline2\",b\nc,d\n");
+    EXPECT_EQ(readCsv(file), (Rows{{"line1\nline2", "b"}, {"c", "d"}}));
 }
 
 TEST_F(CsvReaderTest, CrlfLineEndings) {
-    const auto p = writeFile("a.csv", "a,b\r\n1,2\r\n");
-    EXPECT_EQ(readCsv(p), (Rows{{"a", "b"}, {"1", "2"}}));
+    const auto file = writeFile("a.csv", "a,b\r\n1,2\r\n");
+    EXPECT_EQ(readCsv(file), (Rows{{"a", "b"}, {"1", "2"}}));
 }
 
 TEST_F(CsvReaderTest, StripsUtf8Bom) {
-    const auto p = writeFile("a.csv", "\xEF\xBB\xBF"
-                                      "a,b\n");
-    EXPECT_EQ(readCsv(p), (Rows{{"a", "b"}}));
+    const auto file = writeFile("a.csv", "\xEF\xBB\xBF"
+                                         "a,b\n");
+    EXPECT_EQ(readCsv(file), (Rows{{"a", "b"}}));
 }
 
 TEST_F(CsvReaderTest, SkipsBlankLines) {
-    const auto p = writeFile("a.csv", "a\n\n\nb\n");
-    EXPECT_EQ(readCsv(p), (Rows{{"a"}, {"b"}}));
+    const auto file = writeFile("a.csv", "a\n\n\nb\n");
+    EXPECT_EQ(readCsv(file), (Rows{{"a"}, {"b"}}));
 }
 
 TEST_F(CsvReaderTest, PreservesRowsOfDifferentLengths) {
-    const auto p = writeFile("a.csv", "a,b,c\n1\n1,2\n");
-    EXPECT_EQ(readCsv(p), (Rows{{"a", "b", "c"}, {"1"}, {"1", "2"}}));
+    const auto file = writeFile("a.csv", "a,b,c\n1\n1,2\n");
+    EXPECT_EQ(readCsv(file), (Rows{{"a", "b", "c"}, {"1"}, {"1", "2"}}));
 }
 
 TEST_F(CsvReaderTest, LastRowWithoutTrailingNewline) {
-    const auto p = writeFile("a.csv", "a,b\n1,2");
-    EXPECT_EQ(readCsv(p), (Rows{{"a", "b"}, {"1", "2"}}));
+    const auto file = writeFile("a.csv", "a,b\n1,2");
+    EXPECT_EQ(readCsv(file), (Rows{{"a", "b"}, {"1", "2"}}));
 }
 
 TEST_F(CsvReaderTest, EmptyFieldsArePreserved) {
-    const auto p = writeFile("a.csv", "a,,c\n,,\n");
-    EXPECT_EQ(readCsv(p), (Rows{{"a", "", "c"}, {"", "", ""}}));
+    const auto file = writeFile("a.csv", "a,,c\n,,\n");
+    EXPECT_EQ(readCsv(file), (Rows{{"a", "", "c"}, {"", "", ""}}));
 }
 
 TEST_F(CsvReaderTest, EmptyFileHasNoRows) {
-    const auto p = writeFile("a.csv", "");
-    EXPECT_TRUE(readCsv(p).empty());
+    const auto file = writeFile("a.csv", "");
+    EXPECT_TRUE(readCsv(file).empty());
 }
 
 TEST_F(CsvReaderTest, MissingFileThrows) {
@@ -70,8 +70,8 @@ TEST_F(CsvReaderTest, MissingFileThrows) {
 }
 
 TEST_F(CsvReaderTest, UnclosedQuoteThrows) {
-    const auto p = writeFile("a.csv", "\"never closed,b\n");
-    EXPECT_THROW(readCsv(p), std::runtime_error);
+    const auto file = writeFile("a.csv", "\"never closed,b\n");
+    EXPECT_THROW(readCsv(file), std::runtime_error);
 }
 
 TEST(CsvReaderRealData, ParsesTreeCsv) {

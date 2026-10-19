@@ -10,51 +10,53 @@
 
 namespace packer::packing {
 namespace {
+using geometry::kInf;
 using geometry::Point;
 
-constexpr double kTol = 1e-9; // slack when testing whether a box lies inside a square
+constexpr double kTol = 1e-9;  // slack when testing whether a box lies inside a square
 constexpr double kReach = 0.8; // largest distance from a tree's origin to its outline (the tip)
 
 double cross(const Point &a, const Point &b) {
     return a.x * b.y - a.y * b.x;
 }
 
-Point at(const Crystal &c, double fx, double fy) {
-    return {fx * c.u.x + fy * c.v.x, fx * c.u.y + fy * c.v.y};
+// The point at these fractions of u and v.
+Point at(const Crystal &crystal, double fracU, double fracV) {
+    return {fracU * crystal.u.x + fracV * crystal.v.x, fracU * crystal.u.y + fracV * crystal.v.y};
 }
 
 // The point's coordinates as fractions of u and v.
-Point fractions(const Crystal &c, const Point &p) {
-    const double det = cross(c.u, c.v);
-    return {cross(p, c.v) / det, cross(c.u, p) / det};
+Point fractions(const Crystal &crystal, const Point &point) {
+    const double cellArea = cross(crystal.u, crystal.v); // signed
+    return {cross(point, crystal.v) / cellArea, cross(crystal.u, point) / cellArea};
 }
 
-Box shifted(const Box &b, double dx, double dy) {
-    return {b.minX + dx, b.minY + dy, b.maxX + dx, b.maxY + dy};
+Box shifted(const Box &box, double dx, double dy) {
+    return {box.minX + dx, box.minY + dy, box.maxX + dx, box.maxY + dy};
 }
 
 double wrap01(double x) {
     return x - std::floor(x);
 }
 
-Crystal scaled(const Crystal &c, double f) {
-    Crystal out = c;
-    out.u = {c.u.x * f, c.u.y * f};
-    out.v = {c.v.x * f, c.v.y * f};
+Crystal scaled(const Crystal &crystal, double factor) {
+    Crystal out = crystal;
+    out.u = {crystal.u.x * factor, crystal.u.y * factor};
+    out.v = {crystal.v.x * factor, crystal.v.y * factor};
     return out;
 }
 
 // Scales the cell (the trees keep their places in it) to about the smallest size that is still
 // valid, growing it first if it collides. Returns false if no valid size was found.
-bool tighten(Crystal &c) {
+bool tighten(Crystal &crystal) {
     double hi = 1.0;
     double lo = 0;
-    if (crystalIsValid(c)) {
+    if (crystalIsValid(crystal)) {
         // Shrink in steps until it collides, so the bisection below starts with a tight bracket.
         lo = hi;
         for (int i = 0; i < 60; ++i) {
             lo *= 0.97;
-            if (!crystalIsValid(scaled(c, lo))) break;
+            if (!crystalIsValid(scaled(crystal, lo))) break;
             hi = lo;
         }
     } else {
@@ -62,13 +64,13 @@ bool tighten(Crystal &c) {
             if (i == 100) return false; // two trees sit on top of each other: no size works
             lo = hi;
             hi *= 1.03;
-            if (crystalIsValid(scaled(c, hi))) break;
+            if (crystalIsValid(scaled(crystal, hi))) break;
         }
     }
 
     for (int i = 0; i < 28; ++i) {
         const double mid = (lo + hi) / 2;
-        if (crystalIsValid(scaled(c, mid))) {
+        if (crystalIsValid(scaled(crystal, mid))) {
             hi = mid;
         } else {
             lo = mid;
@@ -76,8 +78,8 @@ bool tighten(Crystal &c) {
     }
 
     // Back off by a hair, so rounding far from the origin can never turn a touch into an overlap.
-    const Crystal safer = scaled(c, hi * (1 + 1e-9));
-    c = crystalIsValid(safer) ? safer : scaled(c, hi);
+    const Crystal safer = scaled(crystal, hi * (1 + 1e-9));
+    crystal = crystalIsValid(safer) ? safer : scaled(crystal, hi);
 
     return true;
 }
@@ -90,65 +92,65 @@ struct Shape {
     double h = 0;
 };
 
-Crystal build(const Shape &s, const std::vector<Pose> &cell) {
-    return {{s.a, 0}, {s.h * s.a, s.b}, cell};
+Crystal build(const Shape &shape, const std::vector<Pose> &cell) {
+    return {{shape.a, 0}, {shape.h * shape.a, shape.b}, cell};
 }
 
-Shape shapeOf(const Crystal &c) {
-    return {c.u.x, c.v.y, c.v.x / c.u.x};
+Shape shapeOf(const Crystal &crystal) {
+    return {crystal.u.x, crystal.v.y, crystal.v.x / crystal.u.x};
 }
 } // namespace
 
-double areaPerTree(const Crystal &c) {
-    return std::abs(cross(c.u, c.v)) / static_cast<double>(c.cell.size());
+double areaPerTree(const Crystal &crystal) {
+    return std::abs(cross(crystal.u, crystal.v)) / static_cast<double>(crystal.cell.size());
 }
 
-Pose crystalPose(const Crystal &c, int i, int j, std::size_t k) {
-    const Pose &t = c.cell[k];
-    const Point p = at(c, i + t.x, j + t.y);
-    return {p.x, p.y, t.deg};
+Pose crystalPose(const Crystal &crystal, int i, int j, std::size_t index) {
+    const Pose &tree = crystal.cell[index];
+    const Point point = at(crystal, i + tree.x, j + tree.y);
+    return {point.x, point.y, tree.deg};
 }
 
-bool crystalIsValid(const Crystal &c) {
-    const double det = cross(c.u, c.v);
-    if (std::abs(det) < 1e-12) return false;
+bool crystalIsValid(const Crystal &crystal) {
+    const double cellArea = cross(crystal.u, crystal.v); // signed
+    if (std::abs(cellArea) < 1e-12) return false;
 
-    // A vector w has fractions (w×v, u×w) / det, so |fraction along u| <= |w|·|v| / |det| and
-    // |fraction along v| <= |w|·|u| / |det|. Trees only touch if their origins are within
+    // A vector w has fractions (w×v, u×w) / cellArea, so |fraction along u| <= |w|·|v| / |area|
+    // and |fraction along v| <= |w|·|u| / |area|. Trees only touch if their origins are within
     // 2 reaches: that bounds the cells to check.
     const double range = 2 * kReach;
-    const double spanI = range * std::hypot(c.v.x, c.v.y) / std::abs(det);
-    const double spanJ = range * std::hypot(c.u.x, c.u.y) / std::abs(det);
+    const double spanI = range * std::hypot(crystal.v.x, crystal.v.y) / std::abs(cellArea);
+    const double spanJ = range * std::hypot(crystal.u.x, crystal.u.y) / std::abs(cellArea);
 
-    const std::size_t k = c.cell.size();
-    std::vector<tree::Placed> base(k);
-    for (std::size_t a = 0; a < k; ++a) {
-        base[a] = tree::place(crystalPose(c, 0, 0, a));
+    const std::size_t perCell = crystal.cell.size();
+    std::vector<tree::Placed> base(perCell);
+    for (std::size_t treeA = 0; treeA < perCell; ++treeA) {
+        base[treeA] = tree::place(crystalPose(crystal, 0, 0, treeA));
     }
 
     tree::Placed other;
-    for (std::size_t a = 0; a < k; ++a) {
-        const Pose pa = crystalPose(c, 0, 0, a);
-        // Pairs (a, b) and (b, a) are the same pairs of trees, moved by a whole cell.
-        for (std::size_t b = a; b < k; ++b) {
-            const double fx = c.cell[b].x - c.cell[a].x;
-            const double fy = c.cell[b].y - c.cell[a].y;
-            const int minI = static_cast<int>(std::ceil(-fx - spanI));
-            const int maxI = static_cast<int>(std::floor(-fx + spanI));
-            const int minJ = static_cast<int>(std::ceil(-fy - spanJ));
-            const int maxJ = static_cast<int>(std::floor(-fy + spanJ));
+    for (std::size_t treeA = 0; treeA < perCell; ++treeA) {
+        const Pose poseA = crystalPose(crystal, 0, 0, treeA);
+        // Pairs (A, B) and (B, A) are the same pairs of trees, moved by a whole cell.
+        for (std::size_t treeB = treeA; treeB < perCell; ++treeB) {
+            const double fracU = crystal.cell[treeB].x - crystal.cell[treeA].x;
+            const double fracV = crystal.cell[treeB].y - crystal.cell[treeA].y;
+            const int minI = static_cast<int>(std::ceil(-fracU - spanI));
+            const int maxI = static_cast<int>(std::floor(-fracU + spanI));
+            const int minJ = static_cast<int>(std::ceil(-fracV - spanJ));
+            const int maxJ = static_cast<int>(std::floor(-fracV + spanJ));
 
             for (int i = minI; i <= maxI; ++i) {
                 for (int j = minJ; j <= maxJ; ++j) {
-                    if (a == b && i == 0 && j == 0) continue;
+                    if (treeA == treeB && i == 0 && j == 0) continue;
 
-                    const Pose pb = crystalPose(c, i, j, b);
-                    const double dx = pb.x - pa.x;
-                    const double dy = pb.y - pa.y;
+                    const Pose poseB = crystalPose(crystal, i, j, treeB);
+                    const double dx = poseB.x - poseA.x;
+                    const double dy = poseB.y - poseA.y;
                     if (dx * dx + dy * dy > range * range) continue;
 
-                    tree::place(pb, other);
-                    if (tree::collide(base[a], other)) return false;
+                    tree::place(poseB, other);
+                    if (tree::collide(base[treeA], other)) return false;
                 }
             }
         }
@@ -157,83 +159,84 @@ bool crystalIsValid(const Crystal &c) {
     return true;
 }
 
-Crystal turned(const Crystal &c, double deg) {
+Crystal turned(const Crystal &crystal, double deg) {
     const double rad = deg * std::numbers::pi / 180.0;
-    const double cs = std::cos(rad);
-    const double sn = std::sin(rad);
-    auto turn = [&](const Point &p) { return Point{p.x * cs - p.y * sn, p.x * sn + p.y * cs}; };
+    const double cosine = std::cos(rad);
+    const double sine = std::sin(rad);
+    auto turn = [&](const Point &point) {
+        return Point{point.x * cosine - point.y * sine, point.x * sine + point.y * cosine};
+    };
 
-    Crystal out = c;
-    out.u = turn(c.u);
-    out.v = turn(c.v);
-    for (Pose &t : out.cell) {
-        t.deg = geometry::normalizeDeg(t.deg + deg); // fractions turn with u and v
+    Crystal out = crystal;
+    out.u = turn(crystal.u);
+    out.v = turn(crystal.v);
+    for (Pose &tree : out.cell) {
+        tree.deg = geometry::normalizeDeg(tree.deg + deg); // fractions turn with u and v
     }
 
     return out;
 }
 
-Crystal doubled(const Crystal &c) {
-    Crystal out = c;
-    out.u = {2 * c.u.x, 2 * c.u.y};
+Crystal doubled(const Crystal &crystal) {
+    Crystal out = crystal;
+    out.u = {2 * crystal.u.x, 2 * crystal.u.y};
     out.cell.clear();
-    for (const Pose &t : c.cell) {
-        out.cell.push_back({t.x / 2, t.y, t.deg});
+    for (const Pose &tree : crystal.cell) {
+        out.cell.push_back({tree.x / 2, tree.y, tree.deg});
     }
-    for (const Pose &t : c.cell) {
-        out.cell.push_back({t.x / 2 + 0.5, t.y, t.deg});
+    for (const Pose &tree : crystal.cell) {
+        out.cell.push_back({tree.x / 2 + 0.5, tree.y, tree.deg});
     }
     return out;
 }
 
-Crystal toCrystal(const LatticeParams &p) {
-    Crystal c;
-    c.u = {p.a, 0};
-    c.v = {p.h * p.a, p.b};
-    c.cell = {{0, 0, p.deg}, {p.s, p.t, p.deg + 180}};
-    return c;
+Crystal toCrystal(const LatticeParams &lattice) {
+    Crystal crystal;
+    crystal.u = {lattice.a, 0};
+    crystal.v = {lattice.h * lattice.a, lattice.b};
+    crystal.cell = {{0, 0, lattice.deg}, {lattice.s, lattice.t, lattice.deg + 180}};
+    return crystal;
 }
 
-std::optional<Crystal> findCrystal(int k, bool paired, long iterations, std::mt19937_64 &rng,
+std::optional<Crystal> findCrystal(int perCell, bool paired, long iterations, std::mt19937_64 &rng,
                                    const std::atomic<bool> *stop, const Crystal *start) {
-    if (start) k = static_cast<int>(start->cell.size());
-    if (k < 1) return std::nullopt;
+    if (start) perCell = static_cast<int>(start->cell.size());
+    if (perCell < 1) return std::nullopt;
 
     std::uniform_real_distribution<double> unit(0.0, 1.0);
     auto jiggle = [&](double step) { return step * (2 * unit(rng) - 1); };
-    const auto count = static_cast<std::size_t>(k);
-    auto partnerOf = [&](std::size_t m) -> std::size_t {
-        if (!paired) return m;
-        const std::size_t p = m ^ 1u;
-        return p < count ? p : m;
+    const auto count = static_cast<std::size_t>(perCell);
+    auto partnerOf = [&](std::size_t index) -> std::size_t { // the tree paired with this one
+        if (!paired) return index;
+        const std::size_t partner = index ^ 1u;
+        return partner < count ? partner : index;
     };
 
     // A random roomy cell, so that tighten() only has to shrink it.
-    Shape shape;
-    std::vector<Pose> cell(count);
-    Crystal c;
+    Crystal current;
     for (int attempt = 0; start == nullptr; ++attempt) {
         if (attempt == 100) return std::nullopt;
 
-        const double side = std::sqrt(static_cast<double>(k)) * (1 + unit(rng));
-        shape = {side, side * (0.7 + 0.6 * unit(rng)), unit(rng) - 0.5};
-        for (std::size_t m = 0; m < count; ++m) {
-            cell[m] = {unit(rng), unit(rng), 360 * unit(rng)};
-            if (paired && m % 2 == 1) cell[m].deg = cell[m - 1].deg + 180;
+        const double side = std::sqrt(static_cast<double>(perCell)) * (1 + unit(rng));
+        const Shape shape{side, side * (0.7 + 0.6 * unit(rng)), unit(rng) - 0.5};
+        std::vector<Pose> cell(count);
+        for (std::size_t k = 0; k < count; ++k) {
+            cell[k] = {unit(rng), unit(rng), 360 * unit(rng)};
+            if (paired && k % 2 == 1) cell[k].deg = cell[k - 1].deg + 180;
         }
         cell[0].x = cell[0].y = 0; // moving every tree together changes nothing
 
-        c = build(shape, cell);
-        if (tighten(c)) break;
+        current = build(shape, cell);
+        if (tighten(current)) break;
     }
     if (start) {
         // Level u, as the moves below expect: turning the pattern changes nothing.
-        c = turned(*start, -std::atan2(start->u.y, start->u.x) * 180 / std::numbers::pi);
-        if (!tighten(c)) return std::nullopt;
+        current = turned(*start, -std::atan2(start->u.y, start->u.x) * 180 / std::numbers::pi);
+        if (!tighten(current)) return std::nullopt;
     }
 
-    Crystal best = c;
-    double current = areaPerTree(c);
+    Crystal best = current;
+    double currentArea = areaPerTree(current);
 
     for (long it = 0; it < iterations; ++it) {
         if (stop && it % 256 == 0 && stop->load(std::memory_order_relaxed)) break;
@@ -244,47 +247,50 @@ std::optional<Crystal> findCrystal(int k, bool paired, long iterations, std::mt1
         const double step = heat * 0.05 * std::pow(0.002, progress); // 0.05 down to 0.0001
         const double temp = heat * heat * 0.01 * std::pow(1e-4, progress);
 
-        Shape s = shapeOf(c);
-        std::vector<Pose> q = c.cell;
-        const std::size_t m = std::uniform_int_distribution<std::size_t>(0, count - 1)(rng);
+        Shape shape = shapeOf(current);
+        std::vector<Pose> cell = current.cell;
+        const std::size_t picked = std::uniform_int_distribution<std::size_t>(0, count - 1)(rng);
         const double kind = unit(rng);
 
         if (kind < 0.2) { // stretch one way, squash the other
-            const double r = std::exp(jiggle(step));
-            s.a *= r;
-            s.b /= r;
+            const double ratio = std::exp(jiggle(step));
+            shape.a *= ratio;
+            shape.b /= ratio;
         } else if (kind < 0.35) {
-            s.h += jiggle(step);
+            shape.h += jiggle(step);
         } else if (kind < 0.65 && count > 1) {
-            const std::size_t t = 1 + m % (count - 1); // tree 0 stays at the corner
-            q[t].x = wrap01(q[t].x + jiggle(step));
-            q[t].y = wrap01(q[t].y + jiggle(step));
+            const std::size_t moved = 1 + picked % (count - 1); // tree 0 stays at the corner
+            cell[moved].x = wrap01(cell[moved].x + jiggle(step));
+            cell[moved].y = wrap01(cell[moved].y + jiggle(step));
         } else if (kind < 0.9) {
-            q[m].deg += 30 * jiggle(step);
-            if (partnerOf(m) != m) q[partnerOf(m)].deg = q[m].deg + 180;
+            cell[picked].deg += 30 * jiggle(step);
+            const std::size_t partner = partnerOf(picked);
+            if (partner != picked) cell[partner].deg = cell[picked].deg + 180;
         } else if (kind < 0.93) {
-            q[m].deg += 180;
-            if (partnerOf(m) != m) q[partnerOf(m)].deg += 180;
+            cell[picked].deg += 180;
+            const std::size_t partner = partnerOf(picked);
+            if (partner != picked) cell[partner].deg += 180;
         } else { // turn every tree together, against the cell
             const double turn = 30 * jiggle(step);
-            for (Pose &t : q) t.deg += turn;
+            for (Pose &tree : cell)
+                tree.deg += turn;
         }
 
-        Crystal next = build(s, q);
-        if (!tighten(next)) continue;
+        Crystal candidate = build(shape, cell);
+        if (!tighten(candidate)) continue;
 
-        const double area = areaPerTree(next);
-        const double worseBy = area - current;
+        const double area = areaPerTree(candidate);
+        const double worseBy = area - currentArea;
         const bool accept = worseBy < 0 || unit(rng) < std::exp(-worseBy / temp);
         if (accept) {
-            c = std::move(next);
-            current = area;
-            if (area < areaPerTree(best)) best = c;
+            current = std::move(candidate);
+            currentArea = area;
+            if (area < areaPerTree(best)) best = current;
         }
     }
 
-    for (Pose &t : best.cell) {
-        t.deg = geometry::normalizeDeg(t.deg);
+    for (Pose &tree : best.cell) {
+        tree.deg = geometry::normalizeDeg(tree.deg);
     }
 
     return best;
@@ -294,124 +300,133 @@ std::vector<Crystal> findCrystals(int searches, long iterations, int keep, int t
                                   unsigned seed, const std::atomic<bool> *stop) {
     // The kinds of cell to try, in turn: the double lattice, then freer and bigger cells.
     struct Kind {
-        int k;
+        int perCell;
         bool paired;
     };
     const Kind kinds[] = {{2, true}, {4, true}, {2, false}, {3, false}, {4, false}};
 
     std::vector<std::optional<Crystal>> found(static_cast<std::size_t>(2 * searches));
 
-    // Runs search(s) for s in [first, last) on the threads.
+    // Runs search(index) for every index in [first, last) on the threads.
     auto runAll = [&](int first, int last, const auto &search) {
         const auto count = static_cast<std::size_t>(last - first);
         util::parallelFor(count, std::max(1, threads), [&](std::size_t k) {
             if (stop && stop->load()) return;
-            const int s = first + static_cast<int>(k);
-            std::mt19937_64 rng(seed * 1000003ULL + static_cast<unsigned>(s));
-            found[static_cast<std::size_t>(s)] = search(s, rng);
+            const int index = first + static_cast<int>(k);
+            std::mt19937_64 rng(seed * 1000003ULL + static_cast<unsigned>(index));
+            found[static_cast<std::size_t>(index)] = search(index, rng);
         });
     };
 
     // First from random cells. Bigger cells have more to arrange: give them longer.
-    runAll(0, searches, [&](int s, std::mt19937_64 &rng) {
-        const Kind &kind = kinds[s % std::size(kinds)];
-        return findCrystal(kind.k, kind.paired, iterations * kind.k / 2, rng, stop);
+    runAll(0, searches, [&](int index, std::mt19937_64 &rng) {
+        const Kind &kind = kinds[index % std::size(kinds)];
+        return findCrystal(kind.perCell, kind.paired, iterations * kind.perCell / 2, rng, stop);
     });
 
     // Then from the densest found so far, doubled: a cell of twice the trees is at least as
     // dense, and its copies are free to drift apart into something denser.
     std::vector<Crystal> seeds;
-    for (int s = 0; s < searches; ++s) {
-        if (found[static_cast<std::size_t>(s)]) seeds.push_back(*found[static_cast<std::size_t>(s)]);
+    for (int index = 0; index < searches; ++index) {
+        const std::optional<Crystal> &crystal = found[static_cast<std::size_t>(index)];
+        if (crystal) seeds.push_back(*crystal);
     }
-    std::sort(seeds.begin(), seeds.end(), [](const Crystal &a, const Crystal &b) {
-        return areaPerTree(a) < areaPerTree(b);
-    });
+    std::sort(seeds.begin(), seeds.end(),
+              [](const Crystal &a, const Crystal &b) { return areaPerTree(a) < areaPerTree(b); });
     if (!seeds.empty()) {
-        runAll(searches, 2 * searches, [&](int s, std::mt19937_64 &rng) {
-            const Crystal start = doubled(seeds[static_cast<std::size_t>(s) % std::min<std::size_t>(seeds.size(), 3)]);
+        const std::size_t densest = std::min<std::size_t>(seeds.size(), 3);
+        runAll(searches, 2 * searches, [&](int index, std::mt19937_64 &rng) {
+            const Crystal start = doubled(seeds[static_cast<std::size_t>(index) % densest]);
             return findCrystal(0, false, iterations, rng, stop, &start);
         });
     }
 
     std::vector<Crystal> sorted;
-    for (const auto &c : found) {
-        if (c) sorted.push_back(*c);
+    for (const std::optional<Crystal> &crystal : found) {
+        if (crystal) sorted.push_back(*crystal);
     }
-    std::sort(sorted.begin(), sorted.end(), [](const Crystal &a, const Crystal &b) {
-        return areaPerTree(a) < areaPerTree(b);
-    });
+    std::sort(sorted.begin(), sorted.end(),
+              [](const Crystal &a, const Crystal &b) { return areaPerTree(a) < areaPerTree(b); });
 
     // Searches that end in about the same pattern end at about the same density: keep one of
     // each, so the kept ones cut differently.
     std::vector<Crystal> kept;
-    for (const Crystal &c : sorted) {
+    for (const Crystal &crystal : sorted) {
         if (static_cast<int>(kept.size()) == keep) break;
-        const bool isNew = kept.empty() || areaPerTree(c) > areaPerTree(kept.back()) * (1 + 1e-3);
-        if (isNew) kept.push_back(c);
+        const bool isNew =
+            kept.empty() || areaPerTree(crystal) > areaPerTree(kept.back()) * (1 + 1e-3);
+        if (isNew) kept.push_back(crystal);
     }
 
-    for (const Crystal &c : kept) {
-        std::printf("crystal with %zu trees per cell: area per tree %.6f\n", c.cell.size(),
-                    areaPerTree(c));
+    for (const Crystal &crystal : kept) {
+        std::printf("crystal with %zu trees per cell: area per tree %.6f\n", crystal.cell.size(),
+                    areaPerTree(crystal));
     }
     std::fflush(stdout);
 
     return kept;
 }
 
-Layout cutCrystal(const Crystal &c, int n) {
-    const std::size_t k = c.cell.size();
+Layout cutCrystal(const Crystal &crystal, int n) {
+    const std::size_t perCell = crystal.cell.size();
 
-    struct Tree {
+    // A tree of the pattern that a square might hold.
+    struct Candidate {
         Pose pose;
         Box box;
     };
 
-    std::vector<Box> baseBox(k);
-    std::vector<Tree> anchors(k); // the trees of cell (0, 0)
-    for (std::size_t m = 0; m < k; ++m) {
-        baseBox[m] = tree::place({0, 0, c.cell[m].deg}).box;
-        const Pose p = crystalPose(c, 0, 0, m);
-        anchors[m] = {p, shifted(baseBox[m], p.x, p.y)};
+    std::vector<Box> baseBox(perCell);
+    std::vector<Candidate> anchors(perCell); // the trees of cell (0, 0)
+    for (std::size_t k = 0; k < perCell; ++k) {
+        baseBox[k] = tree::place({0, 0, crystal.cell[k].deg}).box;
+        const Pose pose = crystalPose(crystal, 0, 0, k);
+        anchors[k] = {pose, shifted(baseBox[k], pose.x, pose.y)};
     }
 
     Box anchorSpan = anchors[0].box;
-    for (const Tree &t : anchors) {
-        anchorSpan.minX = std::min(anchorSpan.minX, t.pose.x);
-        anchorSpan.minY = std::min(anchorSpan.minY, t.pose.y);
-        anchorSpan.maxX = std::max(anchorSpan.maxX, t.pose.x);
-        anchorSpan.maxY = std::max(anchorSpan.maxY, t.pose.y);
+    for (const Candidate &anchor : anchors) {
+        anchorSpan.minX = std::min(anchorSpan.minX, anchor.pose.x);
+        anchorSpan.minY = std::min(anchorSpan.minY, anchor.pose.y);
+        anchorSpan.maxX = std::max(anchorSpan.maxX, anchor.pose.x);
+        anchorSpan.maxY = std::max(anchorSpan.maxY, anchor.pose.y);
     }
 
-    std::vector<Tree> trees;
+    std::vector<Candidate> candidates;
 
     // A square that fits whole trees can slide down until its bottom edge touches a tree, then
     // move by whole cells until that tree is one of cell (0, 0). So the square only needs
     // trying with its bottom on an anchor, holding that anchor: every tree such a square of
     // this side could hold lies within this region.
     auto generate = [&](double side) {
-        trees.clear();
+        candidates.clear();
         const Box region{anchorSpan.minX - side - 2 * kReach, anchorSpan.minY - 2 * kReach,
                          anchorSpan.maxX + side + 2 * kReach, anchorSpan.maxY + side + 2 * kReach};
 
-        double minI = INFINITY, maxI = -INFINITY, minJ = INFINITY, maxJ = -INFINITY;
-        for (const Point &corner : {Point{region.minX, region.minY}, Point{region.maxX, region.minY},
-                                    Point{region.minX, region.maxY}, Point{region.maxX, region.maxY}}) {
-            const Point f = fractions(c, corner);
-            minI = std::min(minI, f.x);
-            maxI = std::max(maxI, f.x);
-            minJ = std::min(minJ, f.y);
-            maxJ = std::max(maxJ, f.y);
+        double minI = kInf, maxI = -kInf, minJ = kInf, maxJ = -kInf;
+        const Point corners[] = {{region.minX, region.minY},
+                                 {region.maxX, region.minY},
+                                 {region.minX, region.maxY},
+                                 {region.maxX, region.maxY}};
+        for (const Point &corner : corners) {
+            const Point frac = fractions(crystal, corner);
+            minI = std::min(minI, frac.x);
+            maxI = std::max(maxI, frac.x);
+            minJ = std::min(minJ, frac.y);
+            maxJ = std::max(maxJ, frac.y);
         }
 
-        for (int i = static_cast<int>(std::floor(minI)) - 1; i <= static_cast<int>(std::ceil(maxI)) + 1; ++i) {
-            for (int j = static_cast<int>(std::floor(minJ)) - 1; j <= static_cast<int>(std::ceil(maxJ)) + 1; ++j) {
-                for (std::size_t m = 0; m < k; ++m) {
-                    const Pose p = crystalPose(c, i, j, m);
-                    const bool inRegion = p.x >= region.minX && p.x <= region.maxX &&
-                                          p.y >= region.minY && p.y <= region.maxY;
-                    if (inRegion) trees.push_back({p, shifted(baseBox[m], p.x, p.y)});
+        const int firstI = static_cast<int>(std::floor(minI)) - 1;
+        const int lastI = static_cast<int>(std::ceil(maxI)) + 1;
+        const int firstJ = static_cast<int>(std::floor(minJ)) - 1;
+        const int lastJ = static_cast<int>(std::ceil(maxJ)) + 1;
+        for (int i = firstI; i <= lastI; ++i) {
+            for (int j = firstJ; j <= lastJ; ++j) {
+                for (std::size_t k = 0; k < perCell; ++k) {
+                    const Pose pose = crystalPose(crystal, i, j, k);
+                    const bool inRegion = pose.x >= region.minX && pose.x <= region.maxX &&
+                                          pose.y >= region.minY && pose.y <= region.maxY;
+                    if (inRegion) candidates.push_back({pose, shifted(baseBox[k], pose.x, pose.y)});
                 }
             }
         }
@@ -428,24 +443,27 @@ Layout cutCrystal(const Crystal &c, int n) {
     std::vector<std::pair<double, double>> band; // (minX, maxX) of the trees within the rows
     auto bestWindow = [&](double side) {
         Window best;
-        for (const Tree &anchor : anchors) {
+        for (const Candidate &anchor : anchors) {
             const double y0 = anchor.box.minY;
             band.clear();
-            for (const Tree &t : trees) {
-                const bool fitsY = t.box.minY >= y0 - kTol && t.box.maxY <= y0 + side + kTol;
-                if (fitsY) band.push_back({t.box.minX, t.box.maxX});
+            for (const Candidate &candidate : candidates) {
+                const Box &box = candidate.box;
+                const bool fitsY = box.minY >= y0 - kTol && box.maxY <= y0 + side + kTol;
+                if (fitsY) band.push_back({box.minX, box.maxX});
             }
             std::sort(band.begin(), band.end());
 
             const double firstX = anchor.box.maxX - side - kTol;
             const double lastX = anchor.box.minX + kTol;
-            const auto from = std::lower_bound(band.begin(), band.end(), std::pair{firstX, -HUGE_VAL});
-            for (auto it = from; it != band.end() && it->first <= lastX; ++it) {
-                const double x0 = it->first;
+            const auto from = std::lower_bound(band.begin(), band.end(), std::pair{firstX, -kInf});
+            for (auto left = from; left != band.end() && left->first <= lastX; ++left) {
+                const double x0 = left->first;
                 int count = 0;
-                for (auto t = std::lower_bound(band.begin(), band.end(), std::pair{x0 - kTol, -HUGE_VAL});
-                     t != band.end() && t->first <= x0 + side + kTol; ++t) {
-                    if (t->second <= x0 + side + kTol) ++count;
+                const auto firstIn =
+                    std::lower_bound(band.begin(), band.end(), std::pair{x0 - kTol, -kInf});
+                for (auto tree = firstIn; tree != band.end() && tree->first <= x0 + side + kTol;
+                     ++tree) {
+                    if (tree->second <= x0 + side + kTol) ++count;
                 }
                 if (count > best.count) best = {x0, y0, count};
             }
@@ -454,7 +472,7 @@ Layout cutCrystal(const Crystal &c, int n) {
     };
 
     // A side that surely holds n trees, then bisect down to the smallest one that does.
-    double hi = std::sqrt(n * areaPerTree(c)) * 1.3 + 1.5;
+    double hi = std::sqrt(n * areaPerTree(crystal)) * 1.3 + 1.5;
     generate(hi);
     while (bestWindow(hi).count < n) {
         hi *= 1.3;
@@ -471,12 +489,13 @@ Layout cutCrystal(const Crystal &c, int n) {
         }
     }
 
-    const Window w = bestWindow(hi);
+    const Window window = bestWindow(hi);
     Layout layout;
-    for (const Tree &t : trees) {
-        const bool fitsX = t.box.minX >= w.x0 - kTol && t.box.maxX <= w.x0 + hi + kTol;
-        const bool fitsY = t.box.minY >= w.y0 - kTol && t.box.maxY <= w.y0 + hi + kTol;
-        if (fitsX && fitsY) layout.add(t.pose);
+    for (const Candidate &candidate : candidates) {
+        const Box &box = candidate.box;
+        const bool fitsX = box.minX >= window.x0 - kTol && box.maxX <= window.x0 + hi + kTol;
+        const bool fitsY = box.minY >= window.y0 - kTol && box.maxY <= window.y0 + hi + kTol;
+        if (fitsX && fitsY) layout.add(candidate.pose);
     }
 
     // The square may hold a few more than n: drop the ones that shrink it most.
@@ -487,7 +506,7 @@ Layout cutCrystal(const Crystal &c, int n) {
     return layout;
 }
 
-std::pair<Layout, double> bestCrystalCut(const Crystal &c, int n, int angles,
+std::pair<Layout, double> bestCrystalCut(const Crystal &crystal, int n, int angles,
                                          std::mt19937_64 &rng) {
     std::uniform_real_distribution<double> unit(0.0, 1.0);
     const double spacing = 90.0 / std::max(1, angles);
@@ -496,18 +515,18 @@ std::pair<Layout, double> bestCrystalCut(const Crystal &c, int n, int angles,
     // Evenly spaced angles, and the ones that lay a short lattice vector level: those cut
     // rows cleanly.
     std::vector<double> degs;
-    for (int a = 0; a < std::max(1, angles); ++a) {
-        degs.push_back(offset + a * spacing);
+    for (int k = 0; k < std::max(1, angles); ++k) {
+        degs.push_back(offset + k * spacing);
     }
-    for (const Point &w : {c.u, c.v, Point{c.u.x + c.v.x, c.u.y + c.v.y},
-                           Point{c.u.x - c.v.x, c.u.y - c.v.y}}) {
-        degs.push_back(-std::atan2(w.y, w.x) * 180 / std::numbers::pi);
+    const Point &u = crystal.u, &v = crystal.v;
+    for (const Point &edge : {u, v, Point{u.x + v.x, u.y + v.y}, Point{u.x - v.x, u.y - v.y}}) {
+        degs.push_back(-std::atan2(edge.y, edge.x) * 180 / std::numbers::pi);
     }
 
     Layout best;
     double bestDeg = 0;
     for (const double deg : degs) {
-        Layout cut = cutCrystal(turned(c, deg), n);
+        Layout cut = cutCrystal(turned(crystal, deg), n);
         if (best.size() == 0 || cut.side() < best.side()) {
             best = std::move(cut);
             bestDeg = deg;

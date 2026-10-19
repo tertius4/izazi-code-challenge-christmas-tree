@@ -13,9 +13,9 @@ std::string formatId(std::size_t n, std::size_t i) {
     return out.str();
 }
 
-std::string formatValue(double v) {
+std::string formatValue(double value) {
     std::ostringstream out;
-    out << std::fixed << std::setprecision(15) << v;
+    out << std::fixed << std::setprecision(15) << value;
     return "s" + out.str();
 }
 
@@ -36,9 +36,9 @@ std::vector<std::vector<std::string>> submissionTable(const std::vector<packing:
         const auto [cx, cy] = geometry::centre(layout.bounds());
 
         for (std::size_t i = 0; i < layout.size(); ++i) {
-            const geometry::Pose &p = layout.poses[i];
-            rows.push_back({formatId(n, i), formatValue(p.x - cx), formatValue(p.y - cy),
-                            formatValue(geometry::normalizeDeg(p.deg))});
+            const geometry::Pose &pose = layout.poses[i];
+            rows.push_back({formatId(n, i), formatValue(pose.x - cx), formatValue(pose.y - cy),
+                            formatValue(geometry::normalizeDeg(pose.deg))});
         }
     }
 
@@ -48,13 +48,13 @@ std::vector<std::vector<std::string>> submissionTable(const std::vector<packing:
 std::vector<packing::Layout> loadSubmission(const std::vector<std::vector<std::string>> &table) {
     std::vector<packing::Layout> layouts(1);
 
-    for (std::size_t r = 1; r < table.size(); ++r) { // row 0 is the header
-        const auto &row = table[r];
+    for (std::size_t rowIndex = 1; rowIndex < table.size(); ++rowIndex) { // row 0 is the header
+        const auto &row = table[rowIndex];
         const std::string id = row.empty() ? "" : row[0]; // like "050_3"
         const std::size_t underscore = id.find('_');
         const bool validRow = row.size() >= 4 && underscore != std::string::npos;
         if (!validRow) {
-            throw std::runtime_error("bad submission row " + std::to_string(r));
+            throw std::runtime_error("bad submission row " + std::to_string(rowIndex));
         }
 
         const std::size_t n = std::stoul(id.substr(0, underscore));

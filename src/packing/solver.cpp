@@ -3,29 +3,28 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <iomanip>
-#include <iostream>
-#include <limits>
 #include <mutex>
 #include <optional>
 #include <random>
 #include <sstream>
 #include <utility>
 
-#include "packing/improver.h"
 #include "packing/lattice.h"
+#include "packing/layout.h"
 #include "packing/rotation.h"
 #include "packing/starts.h"
 #include "util/parallel.h"
 
 namespace packer::packing {
 namespace {
-constexpr double kInf = std::numeric_limits<double>::infinity();
+using geometry::kInf;
 
 // A short label for the report, such as "lattice 12.3deg".
-std::string latticeName(const LatticeParams &p) {
+std::string latticeName(const LatticeParams &lattice) {
     std::ostringstream out;
-    out << "lattice " << std::fixed << std::setprecision(1) << geometry::normalizeDeg(p.deg)
+    out << "lattice " << std::fixed << std::setprecision(1) << geometry::normalizeDeg(lattice.deg)
         << "deg";
 
     return out.str();
@@ -33,15 +32,15 @@ std::string latticeName(const LatticeParams &p) {
 
 // True if the two lattices are the same pattern in the same orientation, up to a mirror
 // image or a half turn. Such copies cut into exactly the same squares.
-bool sameCut(const LatticeParams &p, const LatticeParams &q) {
+bool sameCut(const LatticeParams &a, const LatticeParams &b) {
     auto fold = [](double deg) {
-        const double d = std::fmod(geometry::normalizeDeg(deg), 180.0);
-        return std::min(d, 180.0 - d);
+        const double halfTurn = std::fmod(geometry::normalizeDeg(deg), 180.0);
+        return std::min(halfTurn, 180.0 - halfTurn);
     };
 
-    const bool sameAngle = std::abs(fold(p.deg) - fold(q.deg)) < 0.5;
-    const bool sameA = std::abs(p.a - q.a) < 1e-3;
-    const bool sameB = std::abs(p.b - q.b) < 1e-3;
+    const bool sameAngle = std::abs(fold(a.deg) - fold(b.deg)) < 0.5;
+    const bool sameA = std::abs(a.a - b.a) < 1e-3;
+    const bool sameB = std::abs(a.b - b.b) < 1e-3;
 
     return sameAngle && sameA && sameB;
 }
@@ -57,8 +56,8 @@ std::vector<LatticeParams> findLattices(const SolverConfig &cfg) {
     });
 
     std::vector<LatticeParams> sorted;
-    for (const auto &p : found) {
-        if (p) sorted.push_back(*p);
+    for (const std::optional<LatticeParams> &lattice : found) {
+        if (lattice) sorted.push_back(*lattice);
     }
 
     std::sort(sorted.begin(), sorted.end(), [](const LatticeParams &a, const LatticeParams &b) {
@@ -66,19 +65,19 @@ std::vector<LatticeParams> findLattices(const SolverConfig &cfg) {
     });
 
     std::vector<LatticeParams> lattices;
-    for (const LatticeParams &p : sorted) {
+    for (const LatticeParams &lattice : sorted) {
         const bool haveEnough = static_cast<int>(lattices.size()) == cfg.latticeKeep;
         if (haveEnough) break;
 
-        auto sameAsP = [&](const LatticeParams &q) { return sameCut(p, q); };
-        const bool isNew = std::none_of(lattices.begin(), lattices.end(), sameAsP);
+        auto sameAsThis = [&](const LatticeParams &kept) { return sameCut(lattice, kept); };
+        const bool isNew = std::none_of(lattices.begin(), lattices.end(), sameAsThis);
         if (isNew) {
-            lattices.push_back(p);
+            lattices.push_back(lattice);
         }
     }
 
-    for (const LatticeParams &p : lattices) {
-        std::cout << latticeName(p) << ": area per tree " << areaPerTree(p) << "\n";
+    for (const LatticeParams &lattice : lattices) {
+        std::printf("%s: area per tree %g\n", latticeName(lattice).c_str(), areaPerTree(lattice));
     }
 
     return lattices;
@@ -101,60 +100,60 @@ std::vector<Start> startsFor(int n, const std::vector<LatticeParams> &lattices,
     }
 
     // Random starts are loose, so they need a hot, long anneal to pack at all.
-    AnnealConfig random = cfg.anneal;
-    random.iterations = cfg.randomItersPerTree * n;
-    random.startTemp = cfg.randomTemp;
-    random.startStep = cfg.randomStep;
+    AnnealConfig hotAnneal = cfg.anneal;
+    hotAnneal.iterations = cfg.randomItersPerTree * n;
+    hotAnneal.startTemp = cfg.randomTemp;
+    hotAnneal.startStep = cfg.randomStep;
 
     // A lattice cut is already dense: refine it, gently (cold) or with the usual heat.
-    AnnealConfig lattice = cfg.anneal;
-    lattice.iterations = (n > cfg.mediumMax  ? cfg.largeItersPerTree
-                          : n > cfg.smallMax ? cfg.mediumItersPerTree
-                                             : cfg.itersPerTree) *
-                         n;
+    AnnealConfig cutAnneal = cfg.anneal;
+    cutAnneal.iterations = (n > cfg.mediumMax  ? cfg.largeItersPerTree
+                            : n > cfg.smallMax ? cfg.mediumItersPerTree
+                                               : cfg.itersPerTree) *
+                           n;
 
-    AnnealConfig cold = lattice;
-    cold.startTemp = cfg.latticeTemp;
-    cold.startStep = cfg.latticeStep;
+    AnnealConfig coldAnneal = cutAnneal;
+    coldAnneal.startTemp = cfg.latticeTemp;
+    coldAnneal.startStep = cfg.latticeStep;
 
-    std::vector<Start> grids;
-    for (const LatticeParams &p : lattices) {
-        grids.push_back({cutLattice(p, n), latticeName(p), lattice});
+    std::vector<Start> cuts;
+    for (const LatticeParams &lattice : lattices) {
+        cuts.push_back({cutLattice(lattice, n), latticeName(lattice), cutAnneal});
     }
 
-    std::sort(grids.begin(), grids.end(),
+    std::sort(cuts.begin(), cuts.end(),
               [](const Start &a, const Start &b) { return a.layout.side() < b.layout.side(); });
 
     auto addRandom = [&](int count) {
-        for (int r = 0; r < count; ++r) {
-            starts.push_back({randomStart(n, rng), "random", random});
+        for (int k = 0; k < count; ++k) {
+            starts.push_back({randomStart(n, rng), "random", hotAnneal});
         }
     };
 
     if (n <= cfg.smallMax) {
         addRandom(cfg.restarts);
 
-        if (!grids.empty()) {
-            starts.push_back({grids.front().layout, grids.front().origin + " (cold)", cold});
-            starts.push_back(std::move(grids.front()));
+        if (!cuts.empty()) {
+            starts.push_back({cuts.front().layout, cuts.front().origin + " (cold)", coldAnneal});
+            starts.push_back(std::move(cuts.front()));
         }
     } else if (n <= cfg.mediumMax) {
-        if (!grids.empty()) {
-            starts.push_back({grids.front().layout, grids.front().origin + " (cold)", cold});
+        if (!cuts.empty()) {
+            starts.push_back({cuts.front().layout, cuts.front().origin + " (cold)", coldAnneal});
         }
 
-        const int cuts = std::min(static_cast<int>(grids.size()), cfg.mediumCuts);
-        for (int i = 0; i < cuts; ++i) {
-            starts.push_back(std::move(grids[i]));
+        const int count = std::min(static_cast<int>(cuts.size()), cfg.mediumCuts);
+        for (int k = 0; k < count; ++k) {
+            starts.push_back(std::move(cuts[k]));
         }
 
         addRandom(cfg.mediumRandom);
     } else {
         // Large n: the cut is already close to the best we know, so refine it gently.
-        const int cuts = std::min(static_cast<int>(grids.size()), cfg.largeCuts);
-        for (int i = 0; i < cuts; ++i) {
-            grids[i].anneal = cold;
-            starts.push_back(std::move(grids[i]));
+        const int count = std::min(static_cast<int>(cuts.size()), cfg.largeCuts);
+        for (int k = 0; k < count; ++k) {
+            cuts[k].anneal = coldAnneal;
+            starts.push_back(std::move(cuts[k]));
         }
     }
 
@@ -163,12 +162,12 @@ std::vector<Start> startsFor(int n, const std::vector<LatticeParams> &lattices,
 
 // A short, cold anneal of a layout that is already good, then the best whole-layout turn.
 void refine(Layout &layout, const SolverConfig &cfg, std::mt19937_64 &rng) {
-    AnnealConfig ac = cfg.anneal;
-    ac.iterations = cfg.polishItersPerTree * static_cast<long>(layout.size());
-    ac.startTemp = cfg.polishTemp;
-    ac.startStep = cfg.polishStep;
+    AnnealConfig annealCfg = cfg.anneal;
+    annealCfg.iterations = cfg.polishItersPerTree * static_cast<long>(layout.size());
+    annealCfg.startTemp = cfg.polishTemp;
+    annealCfg.startStep = cfg.polishStep;
 
-    anneal(layout, ac, rng);
+    anneal(layout, annealCfg, rng);
     rotateWhole(layout);
 }
 
@@ -177,18 +176,18 @@ void refine(Layout &layout, const SolverConfig &cfg, std::mt19937_64 &rng) {
 Solution solveAll(const SolverConfig &cfg) {
     const auto started = std::chrono::steady_clock::now();
     auto elapsed = [started] { // whole seconds since the start, for the progress log
-        return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() -
-                                                                started)
-            .count();
+        const auto spent = std::chrono::steady_clock::now() - started;
+        return static_cast<long>(std::chrono::duration_cast<std::chrono::seconds>(spent).count());
     };
 
     // Lattice search is the same for every n, so do it once up front.
     const std::vector<LatticeParams> lattices = findLattices(cfg);
-    std::cout << "[" << elapsed() << "s] lattices found" << std::endl;
+    std::printf("[%lds] lattices found\n", elapsed());
+    std::fflush(stdout);
 
-    Solution sol;
-    sol.layouts.assign(cfg.maxN + 1, Layout());
-    sol.origins.assign(cfg.maxN + 1, "");
+    Solution solution;
+    solution.layouts.assign(cfg.maxN + 1, Layout());
+    solution.origins.assign(cfg.maxN + 1, "");
 
     // Each n is independent: spread them over all cores, slowest first so no core is left
     // with a long job at the end. The small n, with their many random starts, are slowest.
@@ -201,7 +200,6 @@ Solution solveAll(const SolverConfig &cfg) {
         order.push_back(n);
     }
 
-    std::mutex logMutex;
     util::parallelFor(order.size(), cfg.threads, [&](std::size_t k) {
         const int n = order[k];
         std::mt19937_64 rng(cfg.seed + n);
@@ -216,28 +214,29 @@ Solution solveAll(const SolverConfig &cfg) {
             const bool isBest = smaller && start.layout.isValid();
             if (isBest) {
                 bestSide = start.layout.side();
-                sol.layouts[n] = std::move(start.layout);
-                sol.origins[n] = start.origin;
+                solution.layouts[n] = std::move(start.layout);
+                solution.origins[n] = start.origin;
             }
         }
 
-        const bool hasAllTrees = static_cast<int>(sol.layouts[n].size()) == n;
+        const bool hasAllTrees = static_cast<int>(solution.layouts[n].size()) == n;
         if (n > 1 && hasAllTrees) {
-            rotateWhole(sol.layouts[n]);
+            rotateWhole(solution.layouts[n]);
         }
 
         if (!hasAllTrees) { // fallback, should not happen
             Layout layout = randomStart(n, rng);
-            AnnealConfig ac = cfg.anneal;
-            ac.iterations = cfg.randomItersPerTree * n;
-            anneal(layout, ac, rng);
-            sol.layouts[n] = std::move(layout);
-            sol.origins[n] = "random (fallback)";
+            AnnealConfig annealCfg = cfg.anneal;
+            annealCfg.iterations = cfg.randomItersPerTree * n;
+            anneal(layout, annealCfg, rng);
+            solution.layouts[n] = std::move(layout);
+            solution.origins[n] = "random (fallback)";
         }
 
-        const std::lock_guard lock(logMutex);
-        std::cout << "[" << elapsed() << "s] n=" << n << " side=" << sol.layouts[n].side() << " ("
-                  << sol.origins[n] << ")" << std::endl;
+        // One printf call writes its line whole, so lines from different threads don't mix.
+        std::printf("[%lds] n=%d side=%g (%s)\n", elapsed(), n, solution.layouts[n].side(),
+                    solution.origins[n].c_str());
+        std::fflush(stdout);
     });
 
     // Neighbouring n help each other. Backward: n trees minus the worst tree can beat n-1.
@@ -245,19 +244,19 @@ Solution solveAll(const SolverConfig &cfg) {
     // before it replaces anything. Every pass reads a snapshot, so the n run in parallel.
     constexpr double kTol = 1e-12;
     for (int pass = 0; pass < cfg.passes; ++pass) {
-        const std::vector<Layout> snapshot = sol.layouts;
+        const std::vector<Layout> snapshot = solution.layouts;
         std::vector<std::optional<Layout>> better(cfg.maxN + 1);
-        std::vector<std::string> how(cfg.maxN + 1);
+        std::vector<std::string> betterOrigin(cfg.maxN + 1);
 
-        // Keeps a candidate layout for m trees if it beats the one kept so far.
+        // Keeps a candidate layout of `trees` trees if it beats the one kept so far.
         std::mutex betterMutex;
-        auto offer = [&](int m, Layout candidate, const std::string &origin) {
+        auto offer = [&](int trees, Layout candidate, const std::string &origin) {
             const std::lock_guard lock(betterMutex);
-            std::optional<Layout> &kept = better[m];
+            std::optional<Layout> &kept = better[trees];
             const bool beatsKept = !kept || candidate.side() < kept->side();
             if (beatsKept) {
                 kept = std::move(candidate);
-                how[m] = origin;
+                betterOrigin[trees] = origin;
             }
         };
 
@@ -304,20 +303,21 @@ Solution solveAll(const SolverConfig &cfg) {
             std::optional<Layout> &found = better[n];
             if (!found) continue;
 
-            const bool smaller = found->side() < sol.layouts[n].side() - kTol;
+            const bool smaller = found->side() < solution.layouts[n].side() - kTol;
             if (smaller) {
-                sol.layouts[n] = std::move(*found);
-                sol.origins[n] = how[n];
+                solution.layouts[n] = std::move(*found);
+                solution.origins[n] = betterOrigin[n];
                 changed = true;
             }
         }
 
-        std::cout << "[" << elapsed() << "s] pass " << pass << ": score " << totalScore(sol.layouts)
-                  << (changed ? "" : " (no change)") << std::endl;
+        std::printf("[%lds] pass %d: score %g%s\n", elapsed(), pass, totalScore(solution.layouts),
+                    changed ? "" : " (no change)");
+        std::fflush(stdout);
 
         if (!changed) break;
     }
 
-    return sol;
+    return solution;
 }
 } // namespace packer::packing

@@ -1,9 +1,12 @@
 #pragma once
 
 #include <algorithm>
+#include <limits>
 #include <vector>
 
 namespace packer::geometry {
+inline constexpr double kInf = std::numeric_limits<double>::infinity();
+
 struct Point {
     double x = 0;
     double y = 0;
@@ -34,17 +37,17 @@ Box boundingBox(const Polygon &poly);
 inline bool boxesOverlap(const Box &a, const Box &b) {
     return a.minX <= b.maxX && b.minX <= a.maxX && a.minY <= b.maxY && b.minY <= a.maxY;
 }
-inline Point centre(const Box &b) {
-    return {(b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2};
+inline Point centre(const Box &box) {
+    return {(box.minX + box.maxX) / 2, (box.minY + box.maxY) / 2};
 }
-// The axis-aligned square of this side centred on c.
-inline Box squareAround(const Point &c, double side) {
-    return {c.x - side / 2, c.y - side / 2, c.x + side / 2, c.y + side / 2};
+// The axis-aligned square of this side centred on `middle`.
+inline Box squareAround(const Point &middle, double side) {
+    return {middle.x - side / 2, middle.y - side / 2, middle.x + side / 2, middle.y + side / 2};
 }
-// How far box t sticks out of the square, summed over its four sides.
-inline double outside(const Box &t, const Box &square) {
-    return std::max(0.0, square.minX - t.minX) + std::max(0.0, t.maxX - square.maxX) +
-           std::max(0.0, square.minY - t.minY) + std::max(0.0, t.maxY - square.maxY);
+// How far the box sticks out of the square, summed over its four sides.
+inline double outside(const Box &box, const Box &square) {
+    return std::max(0.0, square.minX - box.minX) + std::max(0.0, box.maxX - square.maxX) +
+           std::max(0.0, square.minY - box.minY) + std::max(0.0, box.maxY - square.maxY);
 }
 double polygonArea(const Polygon &poly);
 // Maps any angle into [0, 360).

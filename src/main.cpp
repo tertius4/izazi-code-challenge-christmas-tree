@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <atomic>
 #include <csignal>
+#include <cstdio>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
@@ -30,32 +31,33 @@ void onInterrupt(int) {
 // Writes the file next to its final place, then renames it, so an interrupted write never
 // leaves a broken store behind.
 void writeAtomically(const fs::path &path, const std::vector<std::vector<std::string>> &rows) {
-    const fs::path tmp = path.string() + ".tmp";
-    if (!packer::io::writeCsv(tmp.string(), rows)) {
-        throw std::runtime_error("Failed to write " + tmp.string());
+    const fs::path tempPath = path.string() + ".tmp";
+    if (!packer::io::writeCsv(tempPath.string(), rows)) {
+        throw std::runtime_error("Failed to write " + tempPath.string());
     }
 
-    fs::rename(tmp, path);
+    fs::rename(tempPath, path);
 }
 
 // The best-known layouts in `dir`, checked: layouts[n] must hold n trees that don't collide.
 // The origins come from report.csv when it is there.
 packer::packing::Solution load(const fs::path &dir) {
-    packer::packing::Solution sol;
-    sol.layouts = packer::io::loadSubmission(packer::io::readCsv((dir / "results.csv").string()));
-    if (sol.layouts.size() != 201) {
+    packer::packing::Solution solution;
+    solution.layouts =
+        packer::io::loadSubmission(packer::io::readCsv((dir / "results.csv").string()));
+    if (solution.layouts.size() != 201) {
         throw std::runtime_error("results.csv must hold layouts for n = 1..200");
     }
 
-    for (std::size_t n = 1; n < sol.layouts.size(); ++n) {
-        const Layout &layout = sol.layouts[n];
+    for (std::size_t n = 1; n < solution.layouts.size(); ++n) {
+        const Layout &layout = solution.layouts[n];
         const bool validLayout = layout.size() == n && layout.isValid();
         if (!validLayout) {
             throw std::runtime_error("results.csv: invalid layout for n=" + std::to_string(n));
         }
     }
 
-    sol.origins.assign(sol.layouts.size(), "loaded");
+    solution.origins.assign(solution.layouts.size(), "loaded");
     if (fs::exists(dir / "report.csv")) {
         for (const auto &row : packer::io::readCsv((dir / "report.csv").string())) {
             if (row.size() < 4) continue;
@@ -64,11 +66,11 @@ packer::packing::Solution load(const fs::path &dir) {
             if (isHeaderOrTotal) continue;
 
             const std::size_t n = std::stoul(row[0]);
-            if (n < sol.origins.size()) sol.origins[n] = row[3];
+            if (n < solution.origins.size()) solution.origins[n] = row[3];
         }
     }
 
-    return sol;
+    return solution;
 }
 
 // The densest crystals, from crystals.csv in `dir`; searched for (which takes a few minutes)
@@ -77,7 +79,8 @@ std::vector<packer::packing::Crystal> crystals(const fs::path &dir, int threads)
     const fs::path path = dir / "crystals.csv";
     if (fs::exists(path)) return packer::io::loadCrystals(packer::io::readCsv(path.string()));
 
-    std::cout << "No " << path.string() << " yet: searching for dense crystals first.\n";
+    std::printf("No %s yet: searching for dense crystals first.\n", path.string().c_str());
+    std::fflush(stdout);
     std::vector<packer::packing::Crystal> found =
         packer::packing::findCrystals(16, 100000, 4, threads, 1, &stopRequested);
     if (!stopRequested && !found.empty()) {
@@ -112,17 +115,19 @@ int main(int argc, char *argv[]) {
 
     try {
         const fs::path dir = args->bestDir;
-        packer::packing::Solution sol;
+        packer::packing::Solution solution;
         if (fs::exists(dir / "results.csv")) {
-            sol = load(dir);
+            solution = load(dir);
         } else {
-            std::cout << "No " << (dir / "results.csv").string()
-                      << " yet: building every layout from scratch first (this takes a while).\n";
-            sol = packer::packing::solveAll(packer::packing::SolverConfig{});
-            save(dir, sol.layouts, sol.origins);
+            std::printf("No %s yet: building every layout from scratch first (this takes a "
+                        "while).\n",
+                        (dir / "results.csv").string().c_str());
+            std::fflush(stdout);
+            solution = packer::packing::solveAll(packer::packing::SolverConfig{});
+            save(dir, solution.layouts, solution.origins);
         }
 
-        const double before = packer::packing::totalScore(sol.layouts);
+        const double before = packer::packing::totalScore(solution.layouts);
 
         packer::packing::ImproveConfig cfg;
         cfg.minutes = args->minutes;
@@ -133,20 +138,20 @@ int main(int argc, char *argv[]) {
 
         std::signal(SIGINT, onInterrupt);
         if (cfg.maxN >= cfg.crystalMinN) {
-            const unsigned half = std::max(1u, std::thread::hardware_concurrency() / 2);
-            cfg.crystals = crystals(dir, cfg.threads > 0 ? cfg.threads : static_cast<int>(half));
+            const unsigned halfTheCores = std::max(1u, std::thread::hardware_concurrency() / 2);
+            const int threads = cfg.threads > 0 ? cfg.threads : static_cast<int>(halfTheCores);
+            cfg.crystals = crystals(dir, threads);
         }
         packer::packing::improve(
-            sol.layouts, sol.origins, cfg, stopRequested,
+            solution.layouts, solution.origins, cfg, stopRequested,
             [&](const std::vector<Layout> &layouts, const std::vector<std::string> &origins) {
                 save(dir, layouts, origins);
             });
 
-        const double after = packer::packing::totalScore(sol.layouts);
-        std::cout << "Score: " << before << " -> " << after << "\n"
-                  << "Saved in " << dir.string() << "\n";
-    } catch (const std::exception &e) {
-        std::cerr << "Error: " << e.what() << "\n";
+        const double after = packer::packing::totalScore(solution.layouts);
+        std::printf("Score: %g -> %g\nSaved in %s\n", before, after, dir.string().c_str());
+    } catch (const std::exception &error) {
+        std::fprintf(stderr, "Error: %s\n", error.what());
         return 1;
     }
 

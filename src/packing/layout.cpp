@@ -2,11 +2,12 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 #include <numeric>
 
 namespace packer::packing {
 namespace {
+using geometry::kInf;
+
 constexpr double kCell = 2 * tree::kRadius;
 constexpr int kMargin = 2; // spare cells around the trees when the grid is (re)built
 } // namespace
@@ -51,12 +52,12 @@ void Layout::rebuildGrid() {
         return;
     }
 
-    double minX = INFINITY, minY = INFINITY, maxX = -INFINITY, maxY = -INFINITY;
-    for (const tree::Placed &t : placed) {
-        minX = std::min(minX, t.centre.x);
-        minY = std::min(minY, t.centre.y);
-        maxX = std::max(maxX, t.centre.x);
-        maxY = std::max(maxY, t.centre.y);
+    double minX = kInf, minY = kInf, maxX = -kInf, maxY = -kInf;
+    for (const tree::Placed &tree : placed) {
+        minX = std::min(minX, tree.centre.x);
+        minY = std::min(minY, tree.centre.y);
+        maxX = std::max(maxX, tree.centre.x);
+        maxY = std::max(maxY, tree.centre.y);
     }
 
     originX = minX - kMargin * kCell;
@@ -92,8 +93,8 @@ void Layout::unlist(std::size_t i) {
 }
 
 bool Layout::collidesWithOthers(std::size_t i) const {
-    const tree::Placed &t = placed[i];
-    return anyNeighbour(i, [&](std::size_t j) { return tree::collide(t, placed[j]); });
+    const tree::Placed &self = placed[i];
+    return anyNeighbour(i, [&](std::size_t j) { return tree::collide(self, placed[j]); });
 }
 
 bool Layout::anyCollision() const {
@@ -115,22 +116,22 @@ bool Layout::isValid() const {
 }
 
 Box Layout::bounds() const {
-    Box b = boxes[0];
-    for (const Box &t : boxes) {
-        b.minX = std::min(b.minX, t.minX);
-        b.minY = std::min(b.minY, t.minY);
-        b.maxX = std::max(b.maxX, t.maxX);
-        b.maxY = std::max(b.maxY, t.maxY);
+    Box all = boxes[0];
+    for (const Box &box : boxes) {
+        all.minX = std::min(all.minX, box.minX);
+        all.minY = std::min(all.minY, box.minY);
+        all.maxX = std::max(all.maxX, box.maxX);
+        all.maxY = std::max(all.maxY, box.maxY);
     }
 
-    return b;
+    return all;
 }
 
 double Layout::side() const {
     if (poses.empty()) return 0.0;
 
-    const Box b = bounds();
-    return std::max(b.maxX - b.minX, b.maxY - b.minY);
+    const Box all = bounds();
+    return std::max(all.maxX - all.minX, all.maxY - all.minY);
 }
 
 std::size_t Layout::bestTreeToRemove() const {
@@ -138,20 +139,19 @@ std::size_t Layout::bestTreeToRemove() const {
 }
 
 std::vector<std::size_t> Layout::removalOrder() const {
-    constexpr double kInf = std::numeric_limits<double>::infinity();
     std::vector<double> sideWithout(size());
 
     for (std::size_t skip = 0; skip < size(); ++skip) {
-        Box b{kInf, kInf, -kInf, -kInf};
+        Box rest{kInf, kInf, -kInf, -kInf};
         for (std::size_t j = 0; j < size(); ++j) {
             if (j == skip) continue;
-            b.minX = std::min(b.minX, boxes[j].minX);
-            b.minY = std::min(b.minY, boxes[j].minY);
-            b.maxX = std::max(b.maxX, boxes[j].maxX);
-            b.maxY = std::max(b.maxY, boxes[j].maxY);
+            rest.minX = std::min(rest.minX, boxes[j].minX);
+            rest.minY = std::min(rest.minY, boxes[j].minY);
+            rest.maxX = std::max(rest.maxX, boxes[j].maxX);
+            rest.maxY = std::max(rest.maxY, boxes[j].maxY);
         }
 
-        sideWithout[skip] = std::max(b.maxX - b.minX, b.maxY - b.minY);
+        sideWithout[skip] = std::max(rest.maxX - rest.minX, rest.maxY - rest.minY);
     }
 
     std::vector<std::size_t> order(size());
@@ -164,15 +164,15 @@ std::vector<std::size_t> Layout::removalOrder() const {
 
 std::vector<std::size_t> Layout::edgeTrees() const {
     constexpr double kTol = 1e-9;
-    const Box b = bounds();
+    const Box all = bounds();
     std::vector<std::size_t> edge;
 
     for (std::size_t i = 0; i < size(); ++i) {
-        const Box &t = boxes[i];
-        const bool onLeft = t.minX <= b.minX + kTol;
-        const bool onBottom = t.minY <= b.minY + kTol;
-        const bool onRight = t.maxX >= b.maxX - kTol;
-        const bool onTop = t.maxY >= b.maxY - kTol;
+        const Box &box = boxes[i];
+        const bool onLeft = box.minX <= all.minX + kTol;
+        const bool onBottom = box.minY <= all.minY + kTol;
+        const bool onRight = box.maxX >= all.maxX - kTol;
+        const bool onTop = box.maxY >= all.maxY - kTol;
 
         if (onLeft || onBottom || onRight || onTop) {
             edge.push_back(i);
@@ -180,5 +180,16 @@ std::vector<std::size_t> Layout::edgeTrees() const {
     }
 
     return edge;
+}
+
+double totalScore(const std::vector<Layout> &layouts) {
+    double total = 0;
+
+    for (std::size_t n = 1; n < layouts.size(); ++n) {
+        const double side = layouts[n].side();
+        total += side * side / static_cast<double>(n);
+    }
+
+    return total;
 }
 } // namespace packer::packing

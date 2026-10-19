@@ -28,9 +28,9 @@ struct Layout {
 
     // True if tree i overlaps or touches any other tree.
     bool collidesWithOthers(std::size_t i) const;
-    // Calls f(j) for every other tree j close enough to touch tree i, until f returns true.
-    // Returns whether some f(j) did.
-    template <class F> bool anyNeighbour(std::size_t i, F f) const;
+    // Calls visit(j) for every other tree j close enough to touch tree i, until visit returns
+    // true. Returns whether some visit(j) did.
+    template <class Visit> bool anyNeighbour(std::size_t i, Visit visit) const;
     // True if any two trees collide. Uses the grid, so it is quick.
     bool anyCollision() const;
     // True if no pair of trees collides. Checks every pair without the grid, so it is an
@@ -66,7 +66,7 @@ struct Layout {
     void unlist(std::size_t i);
 };
 
-template <class F> bool Layout::anyNeighbour(std::size_t i, F f) const {
+template <class Visit> bool Layout::anyNeighbour(std::size_t i, Visit visit) const {
     const int cx = cellOf[i] % cols;
     const int cy = cellOf[i] / cols;
 
@@ -79,11 +79,15 @@ template <class F> bool Layout::anyNeighbour(std::size_t i, F f) const {
     for (int y = firstRow; y <= lastRow; ++y) {
         for (int x = firstCol; x <= lastCol; ++x) {
             for (const std::uint32_t j : cells[y * cols + x]) {
-                if (j != i && f(static_cast<std::size_t>(j))) return true;
+                if (j != i && visit(static_cast<std::size_t>(j))) return true;
             }
         }
     }
 
     return false;
 }
+
+// Total score of a set of layouts, where layouts[n] holds n trees (index 0 is unused): the
+// sum over n of side^2 / n.
+double totalScore(const std::vector<Layout> &layouts);
 } // namespace packer::packing

@@ -10,11 +10,12 @@ static std::string escapeField(const std::string &field) {
     }
 
     std::string result = "\"";
-    for (char c : field) {
-        if (c == '"')
+    for (const char ch : field) {
+        if (ch == '"') {
             result += "\"\""; // a quote is escaped by doubling it
-        else
-            result += c;
+        } else {
+            result += ch;
+        }
     }
 
     result += "\"";
@@ -23,12 +24,12 @@ static std::string escapeField(const std::string &field) {
 }
 
 namespace packer::io {
-bool writeCsv(const std::string &path, const std::vector<std::vector<std::string>> &data) {
+bool writeCsv(const std::string &path, const std::vector<std::vector<std::string>> &rows) {
     std::ofstream out(path);
     if (!out) return false;
 
-    for (const auto &row : data) {
-        for (size_t i = 0; i < row.size(); ++i) {
+    for (const auto &row : rows) {
+        for (std::size_t i = 0; i < row.size(); ++i) {
             if (i > 0) out << ",";
             out << escapeField(row[i]);
         }

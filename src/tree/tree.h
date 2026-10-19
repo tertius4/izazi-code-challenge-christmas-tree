@@ -27,9 +27,9 @@ inline constexpr double kCentreY = 0.2971875;
 inline constexpr double kRadius = 0.5028126;
 
 // A convex part placed in the plane: its vertices counter-clockwise, the unit outward normal
-// of each edge (edge k runs from v[k] to v[k+1]), and its box.
+// of each edge (edge k runs from vertex[k] to vertex[k+1]), and its box.
 struct Part {
-    std::array<Point, 4> v{};
+    std::array<Point, 4> vertex{};
     std::array<Point, 4> normal{};
     std::size_t count = 0;
     Box box{};

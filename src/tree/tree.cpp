@@ -6,31 +6,34 @@
 
 namespace packer::tree {
 namespace {
+using geometry::kInf;
+
 // The tiers' slanted edges, extended up to the middle: the middle tier's edge runs from
 // (0.0625, 0.5) to (0.2, 0.25), so it meets x = 0 at this height.
 constexpr double kMiddleApex = 0.5 + 0.0625 * 0.25 / 0.1375;
 
 // The parts of the unturned tree, counter-clockwise, with their outward unit normals.
 struct BasePart {
-    std::array<Point, 4> v{};
+    std::array<Point, 4> vertex{};
     std::array<Point, 4> normal{};
     std::size_t count = 0;
 };
 
-BasePart makePart(std::initializer_list<Point> pts) {
-    BasePart p;
-    for (const Point &q : pts) {
-        p.v[p.count++] = q;
+BasePart makePart(std::initializer_list<Point> vertices) {
+    BasePart part;
+    for (const Point &vertex : vertices) {
+        part.vertex[part.count++] = vertex;
     }
 
-    for (std::size_t k = 0; k < p.count; ++k) {
-        const Point &a = p.v[k];
-        const Point &b = p.v[(k + 1) % p.count];
-        const double len = std::hypot(b.x - a.x, b.y - a.y);
-        p.normal[k] = {(b.y - a.y) / len, -(b.x - a.x) / len}; // right of a->b: outward for CCW
+    for (std::size_t k = 0; k < part.count; ++k) {
+        const Point &start = part.vertex[k];
+        const Point &end = part.vertex[(k + 1) % part.count];
+        const double len = std::hypot(end.x - start.x, end.y - start.y);
+        // Right of start->end: outward for counter-clockwise vertices.
+        part.normal[k] = {(end.y - start.y) / len, -(end.x - start.x) / len};
     }
 
-    return p;
+    return part;
 }
 
 const std::array<BasePart, kParts> &baseParts() {
@@ -49,12 +52,12 @@ const std::array<BasePart, kParts> &baseParts() {
 bool separatedAlong(const Part &a, const Part &b) {
     constexpr double kGap = 1e-12;
     for (std::size_t k = 0; k < a.count; ++k) {
-        const Point &n = a.normal[k];
-        // a lies on the inner side of its own edge k: its maximum along n is that edge.
-        const double aMax = n.x * a.v[k].x + n.y * a.v[k].y;
-        double bMin = INFINITY;
+        const Point &normal = a.normal[k];
+        // a lies on the inner side of its own edge k: its maximum along the normal is that edge.
+        const double aMax = normal.x * a.vertex[k].x + normal.y * a.vertex[k].y;
+        double bMin = kInf;
         for (std::size_t j = 0; j < b.count; ++j) {
-            bMin = std::min(bMin, n.x * b.v[j].x + n.y * b.v[j].y);
+            bMin = std::min(bMin, normal.x * b.vertex[j].x + normal.y * b.vertex[j].y);
         }
 
         if (bMin > aMax + kGap) return true;
@@ -66,13 +69,13 @@ bool separatedAlong(const Part &a, const Part &b) {
 // How far b reaches past a's edges: the smallest push along one of a's edge normals that
 // would clear b. Below -kGap means that normal separates them.
 double reachPast(const Part &a, const Part &b) {
-    double least = INFINITY;
+    double least = kInf;
     for (std::size_t k = 0; k < a.count; ++k) {
-        const Point &n = a.normal[k];
-        const double aMax = n.x * a.v[k].x + n.y * a.v[k].y;
-        double bMin = INFINITY;
+        const Point &normal = a.normal[k];
+        const double aMax = normal.x * a.vertex[k].x + normal.y * a.vertex[k].y;
+        double bMin = kInf;
         for (std::size_t j = 0; j < b.count; ++j) {
-            bMin = std::min(bMin, n.x * b.v[j].x + n.y * b.v[j].y);
+            bMin = std::min(bMin, normal.x * b.vertex[j].x + normal.y * b.vertex[j].y);
         }
 
         least = std::min(least, aMax - bMin);
@@ -100,26 +103,28 @@ const Polygon &outline() {
 
 void place(const Pose &pose, Placed &out) {
     const double rad = pose.deg * std::numbers::pi / 180.0;
-    const double c = std::cos(rad);
-    const double s = std::sin(rad);
+    const double cosine = std::cos(rad);
+    const double sine = std::sin(rad);
 
-    out.box = {INFINITY, INFINITY, -INFINITY, -INFINITY};
+    out.box = {kInf, kInf, -kInf, -kInf};
     const auto &base = baseParts();
-    for (std::size_t p = 0; p < kParts; ++p) {
-        const BasePart &from = base[p];
-        Part &to = out.parts[p];
+    for (std::size_t index = 0; index < kParts; ++index) {
+        const BasePart &from = base[index];
+        Part &to = out.parts[index];
         to.count = from.count;
-        to.box = {INFINITY, INFINITY, -INFINITY, -INFINITY};
+        to.box = {kInf, kInf, -kInf, -kInf};
 
         for (std::size_t k = 0; k < from.count; ++k) {
-            const Point &v = from.v[k];
-            const Point &n = from.normal[k];
-            to.v[k] = {v.x * c - v.y * s + pose.x, v.x * s + v.y * c + pose.y};
-            to.normal[k] = {n.x * c - n.y * s, n.x * s + n.y * c};
-            to.box.minX = std::min(to.box.minX, to.v[k].x);
-            to.box.minY = std::min(to.box.minY, to.v[k].y);
-            to.box.maxX = std::max(to.box.maxX, to.v[k].x);
-            to.box.maxY = std::max(to.box.maxY, to.v[k].y);
+            const Point &vertex = from.vertex[k];
+            const Point &normal = from.normal[k];
+            to.vertex[k] = {vertex.x * cosine - vertex.y * sine + pose.x,
+                            vertex.x * sine + vertex.y * cosine + pose.y};
+            to.normal[k] = {normal.x * cosine - normal.y * sine,
+                            normal.x * sine + normal.y * cosine};
+            to.box.minX = std::min(to.box.minX, to.vertex[k].x);
+            to.box.minY = std::min(to.box.minY, to.vertex[k].y);
+            to.box.maxX = std::max(to.box.maxX, to.vertex[k].x);
+            to.box.maxY = std::max(to.box.maxY, to.vertex[k].y);
         }
 
         out.box.minX = std::min(out.box.minX, to.box.minX);
@@ -128,7 +133,7 @@ void place(const Pose &pose, Placed &out) {
         out.box.maxY = std::max(out.box.maxY, to.box.maxY);
     }
 
-    out.centre = {-kCentreY * s + pose.x, kCentreY * c + pose.y};
+    out.centre = {-kCentreY * sine + pose.x, kCentreY * cosine + pose.y};
 }
 
 Placed place(const Pose &pose) {
@@ -145,10 +150,10 @@ bool collide(const Placed &a, const Placed &b) {
     if (tooFar) return false;
     if (!geometry::boxesOverlap(a.box, b.box)) return false;
 
-    for (const Part &pa : a.parts) {
-        if (!geometry::boxesOverlap(pa.box, b.box)) continue;
-        for (const Part &pb : b.parts) {
-            if (partsCollide(pa, pb)) return true;
+    for (const Part &partA : a.parts) {
+        if (!geometry::boxesOverlap(partA.box, b.box)) continue;
+        for (const Part &partB : b.parts) {
+            if (partsCollide(partA, partB)) return true;
         }
     }
 
@@ -164,12 +169,12 @@ double penetration(const Placed &a, const Placed &b) {
     if (!geometry::boxesOverlap(a.box, b.box)) return 0;
 
     double total = 0;
-    for (const Part &pa : a.parts) {
-        if (!geometry::boxesOverlap(pa.box, b.box)) continue;
-        for (const Part &pb : b.parts) {
-            if (!geometry::boxesOverlap(pa.box, pb.box)) continue;
+    for (const Part &partA : a.parts) {
+        if (!geometry::boxesOverlap(partA.box, b.box)) continue;
+        for (const Part &partB : b.parts) {
+            if (!geometry::boxesOverlap(partA.box, partB.box)) continue;
 
-            const double depth = std::min(reachPast(pa, pb), reachPast(pb, pa));
+            const double depth = std::min(reachPast(partA, partB), reachPast(partB, partA));
             // Exactly the parts that collide: no normal separates them by more than kGap.
             if (depth >= -kGap) total += depth + 2 * kGap;
         }
@@ -185,53 +190,57 @@ Overlap overlap(const Placed &a, Point origin, const Placed &b, double margin) {
     const double reach = 2 * kRadius + margin;
     if (dx * dx + dy * dy > reach * reach) return out;
 
-    auto near = [margin](const Box &p, const Box &q) {
-        return p.minX <= q.maxX + margin && q.minX <= p.maxX + margin &&
-               p.minY <= q.maxY + margin && q.minY <= p.maxY + margin;
+    auto near = [margin](const Box &boxA, const Box &boxB) {
+        return boxA.minX <= boxB.maxX + margin && boxB.minX <= boxA.maxX + margin &&
+               boxA.minY <= boxB.maxY + margin && boxB.minY <= boxA.maxY + margin;
     };
     if (!near(a.box, b.box)) return out;
 
     constexpr double kRadPerDeg = std::numbers::pi / 180.0;
     auto perp = [](const Point &v) { return Point{-v.y, v.x}; }; // turned 90° counter-clockwise
     auto dot = [](const Point &u, const Point &v) { return u.x * v.x + u.y * v.y; };
-    auto from = [&](const Point &v) { return Point{v.x - origin.x, v.y - origin.y}; };
+    auto fromOrigin = [&](const Point &v) { return Point{v.x - origin.x, v.y - origin.y}; };
 
-    for (const Part &pa : a.parts) {
-        if (!near(pa.box, b.box)) continue;
-        for (const Part &pb : b.parts) {
-            if (!near(pa.box, pb.box)) continue;
+    for (const Part &partA : a.parts) {
+        if (!near(partA.box, b.box)) continue;
+        for (const Part &partB : b.parts) {
+            if (!near(partA.box, partB.box)) continue;
 
             // The shallowest axis decides the depth, as in reachPast. Along one of a's normals
             // n, a's edge and n turn with a, b's deepest vertex w stays: the depth moves with
             // n and turns by perp(n)·(origin - w). Along one of b's normals m, a's deepest
             // vertex u moves away from b's edge: by -m, and turns by -m·perp(u - origin).
-            double depth = INFINITY;
+            double depth = kInf;
             Point slope{};
             double turn = 0;
-            for (std::size_t k = 0; k < pa.count; ++k) {
-                const Point &n = pa.normal[k];
-                std::size_t w = 0;
-                for (std::size_t j = 1; j < pb.count; ++j) {
-                    if (dot(n, pb.v[j]) < dot(n, pb.v[w])) w = j;
+            for (std::size_t k = 0; k < partA.count; ++k) {
+                const Point &normal = partA.normal[k]; // n
+                std::size_t deepest = 0;               // w
+                for (std::size_t j = 1; j < partB.count; ++j) {
+                    if (dot(normal, partB.vertex[j]) < dot(normal, partB.vertex[deepest]))
+                        deepest = j;
                 }
-                const double d = dot(n, pa.v[k]) - dot(n, pb.v[w]);
-                if (d < depth) {
-                    depth = d;
-                    slope = n;
-                    turn = dot(perp(n), Point{origin.x - pb.v[w].x, origin.y - pb.v[w].y});
+                const Point &w = partB.vertex[deepest];
+                const double along = dot(normal, partA.vertex[k]) - dot(normal, w);
+                if (along < depth) {
+                    depth = along;
+                    slope = normal;
+                    turn = dot(perp(normal), Point{origin.x - w.x, origin.y - w.y});
                 }
             }
-            for (std::size_t k = 0; k < pb.count; ++k) {
-                const Point &m = pb.normal[k];
-                std::size_t u = 0;
-                for (std::size_t j = 1; j < pa.count; ++j) {
-                    if (dot(m, pa.v[j]) < dot(m, pa.v[u])) u = j;
+            for (std::size_t k = 0; k < partB.count; ++k) {
+                const Point &normal = partB.normal[k]; // m
+                std::size_t deepest = 0;               // u
+                for (std::size_t j = 1; j < partA.count; ++j) {
+                    if (dot(normal, partA.vertex[j]) < dot(normal, partA.vertex[deepest]))
+                        deepest = j;
                 }
-                const double d = dot(m, pb.v[k]) - dot(m, pa.v[u]);
-                if (d < depth) {
-                    depth = d;
-                    slope = {-m.x, -m.y};
-                    turn = -dot(m, perp(from(pa.v[u])));
+                const double along =
+                    dot(normal, partB.vertex[k]) - dot(normal, partA.vertex[deepest]);
+                if (along < depth) {
+                    depth = along;
+                    slope = {-normal.x, -normal.y};
+                    turn = -dot(normal, perp(fromOrigin(partA.vertex[deepest])));
                 }
             }
 

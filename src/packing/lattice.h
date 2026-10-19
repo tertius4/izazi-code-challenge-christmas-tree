@@ -20,18 +20,18 @@ struct LatticeParams {
 };
 
 // Area per tree (a cell holds two trees). Lower means a denser pattern.
-double areaPerTree(const LatticeParams &p);
+double areaPerTree(const LatticeParams &lattice);
 
 // Pose of tree A (second = false) or tree B (second = true) of cell (i, j).
-Pose latticePose(const LatticeParams &p, int i, int j, bool second);
+Pose latticePose(const LatticeParams &lattice, int i, int j, bool second);
 
 // True if no two trees of the infinite lattice collide.
-bool latticeIsValid(const LatticeParams &p);
+bool latticeIsValid(const LatticeParams &lattice);
 
 // Searches for the tightest valid lattice: a random cell improved by simulated annealing
 // over its angle, shape and the place of B. Returns nothing if no valid cell was found.
 std::optional<LatticeParams> findLattice(long iterations, std::mt19937_64 &rng);
 
 // The n trees of the lattice that fit in the smallest square.
-Layout cutLattice(const LatticeParams &p, int n);
+Layout cutLattice(const LatticeParams &lattice, int n);
 } // namespace packer::packing

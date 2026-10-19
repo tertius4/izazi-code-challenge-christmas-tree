@@ -20,7 +20,7 @@ std::vector<std::vector<std::string>> readCsv(const std::string &path) {
     bool inQuotes = false;
     bool fieldStarted = false; // true once the current row has any content
 
-    size_t i = 0;
+    std::size_t i = 0;
     if (text.compare(0, 3, "\xEF\xBB\xBF") == 0) i = 3; // skip UTF-8 BOM
 
     auto endField = [&] {
@@ -38,10 +38,10 @@ std::vector<std::vector<std::string>> readCsv(const std::string &path) {
     };
 
     for (; i < text.size(); ++i) {
-        const char c = text[i];
+        const char ch = text[i];
 
         if (inQuotes) {
-            if (c == '"') {
+            if (ch == '"') {
                 const bool doubledQuote = i + 1 < text.size() && text[i + 1] == '"';
                 if (doubledQuote) {
                     field += '"'; // stands for one literal quote
@@ -50,12 +50,12 @@ std::vector<std::vector<std::string>> readCsv(const std::string &path) {
                     inQuotes = false;
                 }
             } else {
-                field += c;
+                field += ch;
             }
             continue;
         }
 
-        switch (c) {
+        switch (ch) {
         case '"':
             inQuotes = true;
             fieldStarted = true;
@@ -70,7 +70,7 @@ std::vector<std::vector<std::string>> readCsv(const std::string &path) {
             endRow();
             break;
         default:
-            field += c;
+            field += ch;
             fieldStarted = true;
         }
     }

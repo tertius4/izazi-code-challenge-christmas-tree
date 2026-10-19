@@ -23,7 +23,7 @@ struct ImproveConfig {
     long squeezeItersPerTree = 2000; // the single-tree fallback; relax does most of the work
     double squeezeStartShrink = 2e-4;
     double squeezeMaxShrink = 1e-2;
-    int squeezeFailures = 10; // a visit stops squeezing after this many failures in a row
+    int squeezeFailures = 10;      // a visit stops squeezing after this many failures in a row
     long squeezeRelaxIters = 2000; // all-trees relax steps per squeeze (see SqueezeConfig)
     int squeezeGlsRounds = 2;      // penalty raises when relax is stuck (see SqueezeConfig)
     double squeezeLineShare = 0.1; // share of best-of-several single-tree moves
@@ -59,13 +59,13 @@ struct ImproveConfig {
     int crystalMinN = 20;
     int crystalAngles = 12;
     double crystalSlack = 0.005; // squeeze down only from cuts within this of the best side
-    int crystalDescent = 8;     // squeezes when going down from a cut
+    int crystalDescent = 8;      // squeezes when going down from a cut
     // Dense starts, for n <= denseMax: random overlapping trees (half the time point-symmetric)
     // in a roomy square, compressed and squeezed valid, then squeezed down if within
     // denseSlack of the best side. Small n get more of them.
     int denseMax = 40;
-    int denseStarts = 1;     // per visit...
-    int denseSmallMax = 10;  // ...times denseSmallBoost for n up to this
+    int denseStarts = 1;    // per visit...
+    int denseSmallMax = 10; // ...times denseSmallBoost for n up to this
     int denseSmallBoost = 6;
     double denseSlack = 0.05;
     int denseDescent = 12;
@@ -111,7 +111,4 @@ using SaveFn =
     std::function<void(const std::vector<Layout> &best, const std::vector<std::string> &origins)>;
 void improve(std::vector<Layout> &best, std::vector<std::string> &origins, const ImproveConfig &cfg,
              std::atomic<bool> &stop, const SaveFn &save);
-
-// Kaggle score of a set of layouts: sum over n of side^2 / n.
-double totalScore(const std::vector<Layout> &layouts);
 } // namespace packer::packing

@@ -7,25 +7,27 @@
 
 namespace packer::packing {
 namespace {
+using geometry::kInf;
+
 // Side of the square around the layout turned by `deg` about (cx, cy).
 double sideTurnedBy(const Layout &layout, double cx, double cy, double deg, Polygon &scratch) {
-    constexpr double kInf = 1e300;
     const double rad = deg * std::numbers::pi / 180.0;
-    const double c = std::cos(rad);
-    const double s = std::sin(rad);
+    const double cosine = std::cos(rad);
+    const double sine = std::sin(rad);
     double minX = kInf, minY = kInf, maxX = -kInf, maxY = -kInf;
 
-    for (const Pose &p : layout.poses) {
-        const double dx = p.x - cx;
-        const double dy = p.y - cy;
-        geometry::transformInto(tree::outline(),
-                                {cx + dx * c - dy * s, cy + dx * s + dy * c, p.deg + deg}, scratch);
+    for (const Pose &pose : layout.poses) {
+        const double dx = pose.x - cx;
+        const double dy = pose.y - cy;
+        const Pose turned{cx + dx * cosine - dy * sine, cy + dx * sine + dy * cosine,
+                          pose.deg + deg};
+        geometry::transformInto(tree::outline(), turned, scratch);
 
-        for (const geometry::Point &q : scratch) {
-            minX = std::min(minX, q.x);
-            maxX = std::max(maxX, q.x);
-            minY = std::min(minY, q.y);
-            maxY = std::max(maxY, q.y);
+        for (const geometry::Point &vertex : scratch) {
+            minX = std::min(minX, vertex.x);
+            maxX = std::max(maxX, vertex.x);
+            minY = std::min(minY, vertex.y);
+            maxY = std::max(maxY, vertex.y);
         }
     }
 
@@ -66,15 +68,15 @@ bool rotateWhole(Layout &layout) {
 
     const std::vector<Pose> saved = layout.poses;
     const double rad = bestDeg * std::numbers::pi / 180.0;
-    const double c = std::cos(rad);
-    const double s = std::sin(rad);
+    const double cosine = std::cos(rad);
+    const double sine = std::sin(rad);
 
     for (std::size_t i = 0; i < layout.size(); ++i) {
-        const Pose &p = saved[i];
-        const double dx = p.x - cx;
-        const double dy = p.y - cy;
-        layout.setPose(i, {cx + dx * c - dy * s, cy + dx * s + dy * c,
-                           geometry::normalizeDeg(p.deg + bestDeg)});
+        const Pose &pose = saved[i];
+        const double dx = pose.x - cx;
+        const double dy = pose.y - cy;
+        layout.setPose(i, {cx + dx * cosine - dy * sine, cy + dx * sine + dy * cosine,
+                           geometry::normalizeDeg(pose.deg + bestDeg)});
     }
 
     const bool smaller = layout.side() < before;

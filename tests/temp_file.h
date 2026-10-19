@@ -21,8 +21,8 @@ class TempDirTest : public ::testing::Test {
     }
 
     void TearDown() override {
-        std::error_code ec;
-        std::filesystem::remove_all(dir_, ec);
+        std::error_code ignored; // a leftover scratch directory is not worth failing a test
+        std::filesystem::remove_all(dir_, ignored);
     }
 
     std::string path(const std::string &name) const {
@@ -30,14 +30,14 @@ class TempDirTest : public ::testing::Test {
     }
 
     std::string writeFile(const std::string &name, const std::string &content) const {
-        const std::string p = path(name);
-        std::ofstream out(p, std::ios::binary);
+        const std::string filePath = path(name);
+        std::ofstream out(filePath, std::ios::binary);
         out << content;
-        return p;
+        return filePath;
     }
 
-    static std::string slurp(const std::string &p) {
-        std::ifstream in(p, std::ios::binary);
+    static std::string slurp(const std::string &filePath) {
+        std::ifstream in(filePath, std::ios::binary);
         return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     }
 

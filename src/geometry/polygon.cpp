@@ -9,14 +9,15 @@ namespace packer::geometry {
 // Rotate (around 0,0) and shift (on the x and y axis) the polygon
 void transformInto(const Polygon &shape, const Pose &pose, Polygon &out) {
     const double rad = pose.deg * std::numbers::pi / 180.0;
-    const double c = std::cos(rad);
-    const double s = std::sin(rad);
+    const double cosine = std::cos(rad);
+    const double sine = std::sin(rad);
 
     out.resize(shape.size());
     for (std::size_t i = 0; i < shape.size(); ++i) {
-        const Point &p = shape[i];
+        const Point &point = shape[i];
         // Standard 2D rotation matrix, then translation.
-        out[i] = {p.x * c - p.y * s + pose.x, p.x * s + p.y * c + pose.y};
+        out[i] = {point.x * cosine - point.y * sine + pose.x,
+                  point.x * sine + point.y * cosine + pose.y};
     }
 }
 
@@ -29,15 +30,15 @@ Polygon transform(const Polygon &shape, const Pose &pose) {
 
 // Get the min and max of x and y axis of the polygon.
 Box boundingBox(const Polygon &poly) {
-    Box b{poly[0].x, poly[0].y, poly[0].x, poly[0].y};
-    for (const Point &p : poly) {
-        b.minX = std::min(b.minX, p.x);
-        b.minY = std::min(b.minY, p.y);
-        b.maxX = std::max(b.maxX, p.x);
-        b.maxY = std::max(b.maxY, p.y);
+    Box box{poly[0].x, poly[0].y, poly[0].x, poly[0].y};
+    for (const Point &point : poly) {
+        box.minX = std::min(box.minX, point.x);
+        box.minY = std::min(box.minY, point.y);
+        box.maxX = std::max(box.maxX, point.x);
+        box.maxY = std::max(box.maxY, point.y);
     }
 
-    return b;
+    return box;
 }
 
 double polygonArea(const Polygon &poly) {

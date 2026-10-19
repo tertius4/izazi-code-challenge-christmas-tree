@@ -1,7 +1,9 @@
 #include "packing/starts.h"
+
+#include <cmath>
+
 #include "geometry/polygon.h"
 #include "tree/tree.h"
-#include <cmath>
 
 namespace packer::packing {
 Layout bestSingle() {
@@ -11,8 +13,8 @@ Layout bestSingle() {
     double bestDeg = 0;
     double bestSide = layout.side();
     // A square looks the same after a 90° turn, so 0° → 90° covers every case.
-    for (int k = 1; k < 90 * 100; ++k) {
-        const double deg = k / 100.0;
+    for (int hundredths = 1; hundredths < 90 * 100; ++hundredths) {
+        const double deg = hundredths / 100.0;
         layout.setPose(0, {0, 0, deg});
         if (layout.side() < bestSide) {
             bestSide = layout.side();
@@ -69,13 +71,15 @@ Layout symmetricStart(int n, double side, std::mt19937_64 &rng) {
     }
 
     Layout layout;
-    for (const Pose &p : half) {
-        layout.add(p);
+    for (const Pose &pose : half) {
+        layout.add(pose);
     }
-    for (const Pose &p : half) {
-        layout.add({-p.x, -p.y, geometry::normalizeDeg(p.deg + 180)});
+    for (const Pose &pose : half) {
+        layout.add({-pose.x, -pose.y, geometry::normalizeDeg(pose.deg + 180)});
     }
-    if (n % 2 == 1) layout.add({0.1 * side * unit(rng), 0.1 * side * unit(rng), 360.0 * (unit(rng) + 0.5)});
+    if (n % 2 == 1) {
+        layout.add({0.1 * side * unit(rng), 0.1 * side * unit(rng), 360.0 * (unit(rng) + 0.5)});
+    }
 
     return layout;
 }
@@ -90,20 +94,21 @@ std::optional<Layout> withExtraTree(const Layout &layout, std::mt19937_64 &rng) 
     if (layout.size() == 0) return std::nullopt;
 
     std::uniform_real_distribution<double> unit(0.0, 1.0);
-    const Box b = layout.bounds();
-    Layout out = layout;
-    out.add({0, 0, 0});
-    const std::size_t last = out.size() - 1;
+    const Box bounds = layout.bounds();
+    Layout grown = layout;
+    grown.add({0, 0, 0});
+    const std::size_t last = grown.size() - 1;
 
     for (int attempt = 0; attempt < 4000; ++attempt) {
-        out.setPose(last, {b.minX + unit(rng) * (b.maxX - b.minX),
-                           b.minY + unit(rng) * (b.maxY - b.minY), 360.0 * unit(rng)});
-        const Box &t = out.boxes[last];
-        const bool fitsX = t.minX >= b.minX && t.maxX <= b.maxX;
-        const bool fitsY = t.minY >= b.minY && t.maxY <= b.maxY;
+        grown.setPose(last,
+                      {bounds.minX + unit(rng) * (bounds.maxX - bounds.minX),
+                       bounds.minY + unit(rng) * (bounds.maxY - bounds.minY), 360.0 * unit(rng)});
+        const Box &box = grown.boxes[last];
+        const bool fitsX = box.minX >= bounds.minX && box.maxX <= bounds.maxX;
+        const bool fitsY = box.minY >= bounds.minY && box.maxY <= bounds.maxY;
         if (!fitsX || !fitsY) continue;
 
-        if (!out.collidesWithOthers(last)) return out;
+        if (!grown.collidesWithOthers(last)) return grown;
     }
 
     return std::nullopt;

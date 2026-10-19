@@ -21,38 +21,38 @@ std::optional<Args> parseArgs(int argc, const char *const argv[]) {
             if (!hasValue) return std::nullopt;
 
             const std::string value = argv[++i];
-            std::size_t used = 0;
+            std::size_t parsed = 0; // characters of the value that were a number
 
             if (flag == "--minutes") {
-                args.minutes = std::stod(value, &used);
+                args.minutes = std::stod(value, &parsed);
                 if (args.minutes <= 0) return std::nullopt;
             } else if (flag == "--threads") {
-                args.threads = std::stoi(value, &used);
+                args.threads = std::stoi(value, &parsed);
                 if (args.threads < 0) return std::nullopt;
             } else if (flag == "--n") { // "50" or "13-30"
                 const std::size_t dash = value.find('-');
                 const std::string first = value.substr(0, dash);
-                args.minN = std::stoi(first, &used);
-                if (used != first.size()) return std::nullopt;
+                args.minN = std::stoi(first, &parsed);
+                if (parsed != first.size()) return std::nullopt;
                 args.maxN = args.minN;
                 const bool isRange = dash != std::string::npos;
                 if (isRange) {
                     const std::string second = value.substr(dash + 1);
-                    args.maxN = std::stoi(second, &used);
-                    if (used != second.size()) return std::nullopt;
+                    args.maxN = std::stoi(second, &parsed);
+                    if (parsed != second.size()) return std::nullopt;
                 }
-                used = value.size();
+                parsed = value.size();
                 const bool inBounds = args.minN >= 1 && args.maxN <= 200;
                 const bool inOrder = args.minN <= args.maxN;
                 if (!inBounds || !inOrder) return std::nullopt;
             } else if (flag == "--best") {
                 args.bestDir = value;
-                used = value.size();
+                parsed = value.size();
             } else {
                 return std::nullopt;
             }
 
-            if (used != value.size()) return std::nullopt; // trailing junk, like "10x"
+            if (parsed != value.size()) return std::nullopt; // trailing junk, like "10x"
         }
     } catch (const std::logic_error &) { // stod/stoi on a non-number
         return std::nullopt;
