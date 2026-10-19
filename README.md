@@ -52,11 +52,14 @@ If `data/current-best/results.csv` doesn't exist, the first run builds every lay
   go to the n with the best score gain per second so far this run, the rest to a sweep from
   the largest n down. Each visit of n tries, in order: n+1 trees minus each of its best few
   trees to remove; n-1 trees plus one (at the best spot or a random one); squeezing the best
-  layout until it fails often enough; a border squeeze (only trees near the walls move); a
-  compress; shaking; crossover; a crystal cut (n ≥ 20); dense starts (n ≤ 40, more for
-  n ≤ 10); a short re-anneal; and for small n, every other visit, a fresh random start. A
-  result replaces the best only if it is valid and smaller. An improvement makes n+1 try
-  "n plus a tree" right away.
+  layout until it fails often enough; a border squeeze (only trees near the walls move);
+  compressing until it fails often enough; shaking; crossover; a crystal cut (n ≥ 20); dense
+  starts (n ≤ 40, more for n ≤ 10); a walk of re-anneals at rising temperatures, each squeezed
+  down; and for small n, every other visit, a fresh random start. A result replaces the best
+  only if it is valid and smaller. A real improvement makes n+1 try "n plus a tree" right
+  away. Each operator (but the squeeze) runs with a chance set by its score gain per second
+  in that band of n, so operators that don't pay off there are mostly skipped. The stats per
+  operator and band are printed on every save and written to `stats.txt`.
 - **Squeezing** (`src/packing/squeezer.cpp`, by far the most productive): pull the trees into a
   square slightly smaller than the best, letting them overlap, then move every tree at once
   down the slope of the overlap (L-BFGS on the penetration depth between the trees' convex

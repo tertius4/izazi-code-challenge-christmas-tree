@@ -16,6 +16,7 @@ struct ImproveConfig {
     int minN = 1;        // only work on n in [minN, maxN]
     int maxN = 200;
     double saveSeconds = 120; // save this often, so an interrupted run loses little
+    std::string statsPath;    // if set, the operator stats are also written here on every save
     unsigned seed = 0;        // 0: from the clock, so every run tries something new
     // Squeeze: fit the best layout into a slightly smaller square, letting trees overlap and
     // then clearing the overlap. The shrink adapts per n: doubled on success, halved on failure.
@@ -29,17 +30,23 @@ struct ImproveConfig {
     // Border: squeeze with only the trees within this distance of the walls free to move.
     double borderWidth = 1.0;
     // Compress: make the side a variable (see compress()), then squeeze into where it got.
+    // Repeats from each win until it fails compressFailures times in a row, at most
+    // compressTries times a visit (it wins tiny amounts nearly every time).
     long compressIters = 1500;
     int compressRounds = 4;
+    int compressFailures = 2;
+    int compressTries = 4;
     // Shake: kick the current layout (swap, flip or move a few trees, see shake()), settle it
     // back into the best square with a short squeeze, and walk on from there; each settled
     // layout then gets one squeeze into a smaller square.
-    int shakeTries = 20;          // per visit
+    int shakeTries = 8;           // per visit
     int shakeKicks = 3;           // up to this many trees changed per try
     long shakeItersPerTree = 200; // single-tree fallback when settling; relax does the rest
     // Neighbours: n+1 minus one of its best few trees to remove, and n-1 plus a tree (at the
     // best spot or a random one), each squeezed into the best square so far.
-    int removeCandidates = 3;
+    int removeCandidates = 1;
+    // A win on n queues "n plus a tree" for n+1 right away, if it gained more than this.
+    double urgentMinGain = 1e-5;
     // Elites: per n, the few best distinct valid layouts seen, within this fraction of the
     // best side. Crossover mixes the best with an elite (or a turned copy of itself, or a
     // neighbour) and settles the child.
@@ -50,7 +57,7 @@ struct ImproveConfig {
     // angles, compress, and squeeze down from there.
     std::vector<Crystal> crystals;
     int crystalMinN = 20;
-    int crystalAngles = 24;
+    int crystalAngles = 12;
     double crystalSlack = 0.005; // squeeze down only from cuts within this of the best side
     int crystalDescent = 8;     // squeezes when going down from a cut
     // Dense starts, for n <= denseMax: random overlapping trees (half the time point-symmetric)
@@ -66,12 +73,14 @@ struct ImproveConfig {
     // Ruin and recreate (see ruinAndRecreate()): take out a patch of trees and put them back
     // at the best spots, settle into the best square and walk on from there, like shaking but
     // a whole patch at once. For n >= ruinMinN; the patch is 3 trees up to ruinShare of n.
-    int ruinTries = 6; // per visit
+    int ruinTries = 2; // per visit
     int ruinMinN = 8;
     double ruinShare = 0.12;
-    // Re-anneal the best layout cold, with a new seed.
+    // Refine: a walk of re-anneals (no overlap allowed, but trees can relocate into holes),
+    // each at the next temperature of refineTemps and then squeezed into a smaller square.
+    int refineTries = 4; // per visit
     long refineItersPerTree = 4000;
-    double refineTemp = 1e-3;
+    std::vector<double> refineTemps = {1e-3, 3e-3, 1e-2};
     double refineStep = 0.01;
     // Small n are also worth fresh random starts (every other pass), annealed hot and long.
     int smallMax = 30;
@@ -86,9 +95,11 @@ struct ImproveConfig {
     // Which operators run: each try of an operator (other than the squeeze, which always runs)
     // goes ahead with probability its score gain per second this run over the average of all
     // of them, at least opMinChance. Each starts as if it had run opPriorSeconds at the average.
+    // Rates are kept per band of n (see kBands in improver.cpp), so an operator that pays off
+    // only for small n is not judged by its record for large n.
     bool opBandit = true;
-    double opMinChance = 0.15;
-    double opPriorSeconds = 600;
+    double opMinChance = 0.03;
+    double opPriorSeconds = 120;
 };
 
 // best[n] holds the best known n-tree layout (index 0 unused); origins[n] says where it came

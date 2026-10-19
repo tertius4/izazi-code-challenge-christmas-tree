@@ -129,6 +129,7 @@ int main(int argc, char *argv[]) {
         cfg.threads = args->threads;
         cfg.minN = args->minN;
         cfg.maxN = args->maxN;
+        cfg.statsPath = (dir / "stats.txt").string(); // this run's operator stats
 
         std::signal(SIGINT, onInterrupt);
         if (cfg.maxN >= cfg.crystalMinN) {

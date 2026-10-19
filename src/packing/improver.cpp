@@ -9,6 +9,7 @@
 #include <mutex>
 #include <optional>
 #include <random>
+#include <string>
 #include <thread>
 
 #include "packing/annealer.h"
@@ -39,6 +40,16 @@ enum class Op {
     Ruin
 };
 constexpr std::size_t kOps = static_cast<std::size_t>(Op::Ruin) + 1;
+
+// Bands of n, by their largest n, for the operator stats: what works differs with n.
+constexpr std::array<int, 6> kBands = {12, 30, 60, 100, 150, 200};
+
+std::size_t bandOf(int n) {
+    for (std::size_t b = 0; b < kBands.size(); ++b) {
+        if (n <= kBands[b]) return b;
+    }
+    return kBands.size() - 1;
+}
 
 const char *opName(Op op) {
     switch (op) {
@@ -141,27 +152,59 @@ class Run {
     }
 
     // Per operator this run: tries, thread-seconds, improvements and score gained, most time
-    // first. The caller holds the mutex.
+    // first; then the gain per hour of each in each band of n. Printed, and written to
+    // cfg.statsPath if set. The caller holds the mutex.
     void printStats() const {
+        printStats(stdout);
+        if (cfg_.statsPath.empty()) return;
+        if (std::FILE *f = std::fopen(cfg_.statsPath.c_str(), "w")) {
+            printStats(f);
+            std::fclose(f);
+        }
+    }
+
+    void printStats(std::FILE *out) const {
+        const std::array<OpStats, kOps> all = totals();
         double total = 0;
         std::array<std::size_t, kOps> order{};
         for (std::size_t k = 0; k < kOps; ++k) {
             order[k] = k;
-            total += stats_[k].seconds;
+            total += all[k].seconds;
         }
         std::sort(order.begin(), order.end(),
-                  [&](std::size_t a, std::size_t b) { return stats_[a].seconds > stats_[b].seconds; });
+                  [&](std::size_t a, std::size_t b) { return all[a].seconds > all[b].seconds; });
 
-        std::printf("%-22s %8s %10s %6s %6s %10s %12s\n", "operator", "tries", "seconds", "time",
-                    "wins", "gain", "gain/hour");
+        std::fprintf(out, "%-22s %8s %10s %6s %6s %10s %12s\n", "operator", "tries", "seconds",
+                     "time", "wins", "gain", "gain/hour");
         for (const std::size_t k : order) {
-            const OpStats &s = stats_[k];
+            const OpStats &s = all[k];
             if (s.tries == 0) continue;
-            std::printf("%-22s %8ld %10.0f %5.1f%% %6d %10.6f %12.6f\n", opName(static_cast<Op>(k)),
-                        s.tries, s.seconds, total > 0 ? 100 * s.seconds / total : 0.0, s.wins,
-                        s.gain, s.seconds > 0 ? 3600 * s.gain / s.seconds : 0.0);
+            std::fprintf(out, "%-22s %8ld %10.0f %5.1f%% %6d %10.6f %12.6f\n",
+                         opName(static_cast<Op>(k)), s.tries, s.seconds,
+                         total > 0 ? 100 * s.seconds / total : 0.0, s.wins, s.gain,
+                         s.seconds > 0 ? 3600 * s.gain / s.seconds : 0.0);
         }
-        std::fflush(stdout);
+
+        std::fprintf(out, "\n%-22s", "gain/hour by n");
+        for (std::size_t b = 0; b < kBands.size(); ++b) {
+            const int lo = b == 0 ? 1 : kBands[b - 1] + 1;
+            std::fprintf(out, " %9s", (std::to_string(lo) + "-" + std::to_string(kBands[b])).c_str());
+        }
+        std::fprintf(out, "\n");
+        for (const std::size_t k : order) {
+            if (all[k].tries == 0) continue;
+            std::fprintf(out, "%-22s", opName(static_cast<Op>(k)));
+            for (std::size_t b = 0; b < kBands.size(); ++b) {
+                const OpStats &s = stats_[b][k];
+                if (s.seconds > 0) {
+                    std::fprintf(out, " %9.6f", 3600 * s.gain / s.seconds);
+                } else {
+                    std::fprintf(out, " %9s", "-");
+                }
+            }
+            std::fprintf(out, "\n");
+        }
+        std::fflush(out);
     }
 
     std::mutex mutex;
@@ -191,16 +234,30 @@ class Run {
         int wins = 0;
         double gain = 0; // score gained
     };
-    std::array<OpStats, kOps> stats_{};
+    std::array<std::array<OpStats, kOps>, kBands.size()> stats_{}; // per band of n, per op
 
-    // Charges the time from its creation to its end to one try of `op`.
+    // The stats of every band added up.
+    std::array<OpStats, kOps> totals() const {
+        std::array<OpStats, kOps> all{};
+        for (const auto &band : stats_) {
+            for (std::size_t k = 0; k < kOps; ++k) {
+                all[k].tries += band[k].tries;
+                all[k].seconds += band[k].seconds;
+                all[k].wins += band[k].wins;
+                all[k].gain += band[k].gain;
+            }
+        }
+        return all;
+    }
+
+    // Charges the time from its creation to its end to one try of `op` on n.
     class Timed {
       public:
-        Timed(Run &run, Op op) : run_(run), op_(op), began_(Clock::now()) {}
+        Timed(Run &run, Op op, int n) : run_(run), op_(op), band_(bandOf(n)), began_(Clock::now()) {}
         ~Timed() {
             const double s = std::chrono::duration<double>(Clock::now() - began_).count();
             std::lock_guard lock(run_.mutex);
-            OpStats &st = run_.stats_[static_cast<std::size_t>(op_)];
+            OpStats &st = run_.stats_[band_][static_cast<std::size_t>(op_)];
             ++st.tries;
             st.seconds += s;
         }
@@ -210,6 +267,7 @@ class Run {
       private:
         Run &run_;
         const Op op_;
+        const std::size_t band_;
         const Clock::time_point began_;
     };
 
@@ -390,23 +448,30 @@ class Run {
         return *others[std::uniform_int_distribution<std::size_t>(0, others.size() - 1)(rng)];
     }
 
-    // Whether to go ahead with a try of `op` (see ImproveConfig::opBandit).
-    bool worth(Op op, std::mt19937_64 &rng) {
+    // Whether to go ahead with a try of `op` on n (see ImproveConfig::opBandit). Rates are
+    // those of n's band; the totals stand in until the band has gained anything.
+    bool worth(Op op, int n, std::mt19937_64 &rng) {
         if (!cfg_.opBandit) return true;
         double chance = 1;
         {
             std::lock_guard lock(mutex);
-            double gained = 0, spent = 0;
-            for (const OpStats &s : stats_) {
-                gained += s.gain;
-                spent += s.seconds;
-            }
-            if (gained <= 0 || spent <= 0) return true;
-            const double average = gained / spent;
-            const double prior = cfg_.opPriorSeconds;
-            const OpStats &s = stats_[static_cast<std::size_t>(op)];
-            const double rate = (s.gain + average * prior) / (s.seconds + prior);
-            chance = std::clamp(rate / average, cfg_.opMinChance, 1.0);
+            auto rateOf = [&](const std::array<OpStats, kOps> &st, double &average) {
+                double gained = 0, spent = 0;
+                for (const OpStats &s : st) {
+                    gained += s.gain;
+                    spent += s.seconds;
+                }
+                if (gained <= 0 || spent <= 0) return false;
+                average = gained / spent;
+                const double prior = cfg_.opPriorSeconds;
+                const OpStats &s = st[static_cast<std::size_t>(op)];
+                chance = (s.gain + average * prior) / (s.seconds + prior) / average;
+                return true;
+            };
+            double average = 0;
+            const bool known = rateOf(stats_[bandOf(n)], average) || rateOf(totals(), average);
+            if (!known) return true;
+            chance = std::clamp(chance, cfg_.opMinChance, 1.0);
         }
         return std::uniform_real_distribution<double>(0.0, 1.0)(rng) < chance;
     }
@@ -446,8 +511,8 @@ class Run {
             const int tries = std::min<int>(cfg_.removeCandidates, static_cast<int>(order.size()));
             for (int k = 0; k < tries && !stop_.load(); ++k) {
                 std::mt19937_64 rng = rngFor(task, step++);
-                if (!worth(Op::Remove, rng)) continue;
-                const Timed timed(*this, Op::Remove);
+                if (!worth(Op::Remove, n, rng)) continue;
+                const Timed timed(*this, Op::Remove, n);
                 Layout l = from;
                 l.remove(order[k]);
                 offerIf(n, Op::Remove, squeezeInto(l, squeezeTarget(n), rng));
@@ -456,14 +521,14 @@ class Run {
 
         // n-1 plus a tree, squeezed into the best square so far.
         if (std::mt19937_64 rng = rngFor(task, step++);
-            n - 1 >= 1 && !stop_.load() && worth(Op::Add, rng)) {
-            const Timed timed(*this, Op::Add);
+            n - 1 >= 1 && !stop_.load() && worth(Op::Add, n, rng)) {
+            const Timed timed(*this, Op::Add, n);
             offerIf(n, Op::Add, addAndSqueeze(n, rng));
         }
 
         // Squeeze the best layout until it fails often enough.
         for (int failures = 0; failures < cfg_.squeezeFailures && !stop_.load();) {
-            const Timed timed(*this, Op::Squeeze);
+            const Timed timed(*this, Op::Squeeze, n);
             std::mt19937_64 rng = rngFor(task, step++);
             const bool worked =
                 offerIf(n, Op::Squeeze, squeezeInto(bestCopy(n), squeezeTarget(n), rng));
@@ -472,8 +537,8 @@ class Run {
         }
 
         // Only the trees near the walls move; the inside stays as it is.
-        if (std::mt19937_64 rng = rngFor(task, step++); !stop_.load() && worth(Op::Border, rng)) {
-            const Timed timed(*this, Op::Border);
+        if (std::mt19937_64 rng = rngFor(task, step++); !stop_.load() && worth(Op::Border, n, rng)) {
+            const Timed timed(*this, Op::Border, n);
             const Layout b = bestCopy(n);
             SqueezeConfig sc = squeezeConfig(b);
             sc.movable = borderTrees(b, cfg_.borderWidth);
@@ -481,14 +546,23 @@ class Run {
             if (hasInside) offerIf(n, Op::Border, squeezeWith(b, squeezeTarget(n), sc, rng));
         }
 
-        // The side as a variable: the walls close in as far as the trees let them.
-        if (std::mt19937_64 rng = rngFor(task, step++); !stop_.load() && worth(Op::Compress, rng)) {
-            const Timed timed(*this, Op::Compress);
+        // The side as a variable: the walls close in as far as the trees let them. Each win
+        // is the next start, until it fails often enough; every other try works twice as long.
+        for (int k = 0, failures = 0;
+             k < cfg_.compressTries && failures < cfg_.compressFailures && !stop_.load(); ++k) {
+            std::mt19937_64 rng = rngFor(task, step++);
+            if (!worth(Op::Compress, n, rng)) break;
+            const Timed timed(*this, Op::Compress, n);
             Layout c = bestCopy(n);
-            const double side = compress(c, compressConfig());
-            if (side < bestSide(n)) {
-                offerIf(n, Op::Compress, squeezeInto(c, side * (1 + 1e-7), rng));
+            CompressConfig cc = compressConfig();
+            if (k % 2 == 1) {
+                cc.iterations *= 2;
+                cc.rounds *= 2;
             }
+            const double side = compress(c, cc);
+            const bool worked = side < bestSide(n) &&
+                                offerIf(n, Op::Compress, squeezeInto(c, side * (1 + 1e-7), rng));
+            failures = worked ? 0 : failures + 1;
         }
 
         // Shake and settle: a walk through arrangements as good as the best, each one a fresh
@@ -496,8 +570,8 @@ class Run {
         Layout current = bestCopy(n);
         for (int k = 0; k < cfg_.shakeTries && !stop_.load(); ++k) {
             std::mt19937_64 rng = rngFor(task, step++);
-            if (!worth(Op::Shake, rng)) continue;
-            const Timed timed(*this, Op::Shake);
+            if (!worth(Op::Shake, n, rng)) continue;
+            const Timed timed(*this, Op::Shake, n);
             const Layout kicked = shake(current, 1 + k % cfg_.shakeKicks, rng);
             std::optional<Layout> settled =
                 squeezeInto(kicked, bestSide(n), rng, cfg_.shakeItersPerTree);
@@ -513,8 +587,8 @@ class Run {
         // Crossover: half of the best with half of another good layout, settled.
         for (int k = 0; k < cfg_.crossoverTries && !stop_.load(); ++k) {
             std::mt19937_64 rng = rngFor(task, step++);
-            if (!worth(Op::Crossover, rng)) continue;
-            const Timed timed(*this, Op::Crossover);
+            if (!worth(Op::Crossover, n, rng)) continue;
+            const Timed timed(*this, Op::Crossover, n);
             const Layout a = bestCopy(n);
             const Layout b = partnerFor(n, rng);
             const Layout child = crossover(a, b, n, rng);
@@ -535,8 +609,8 @@ class Run {
             const std::size_t most = std::max<std::size_t>(3, static_cast<std::size_t>(cfg_.ruinShare * n));
             for (int k = 0; k < cfg_.ruinTries && !stop_.load(); ++k) {
                 std::mt19937_64 rng = rngFor(task, step++);
-                if (!worth(Op::Ruin, rng)) continue;
-                const Timed timed(*this, Op::Ruin);
+                if (!worth(Op::Ruin, n, rng)) continue;
+                const Timed timed(*this, Op::Ruin, n);
                 const std::size_t count = std::uniform_int_distribution<std::size_t>(3, most)(rng);
                 const Box b = walk.bounds();
                 const double half = bestSide(n) / 2;
@@ -559,8 +633,8 @@ class Run {
         // pattern), then all of it, and squeeze down from there if it came close.
         const bool cutCrystal = !cfg_.crystals.empty() && n >= cfg_.crystalMinN;
         if (std::mt19937_64 rng = rngFor(task, step++);
-            cutCrystal && !stop_.load() && worth(Op::Crystal, rng)) {
-            const Timed timed(*this, Op::Crystal);
+            cutCrystal && !stop_.load() && worth(Op::Crystal, n, rng)) {
+            const Timed timed(*this, Op::Crystal, n);
             const Crystal &c = cfg_.crystals[static_cast<std::size_t>(task.visit) % cfg_.crystals.size()];
             Layout cut = bestCrystalCut(c, n, cfg_.crystalAngles, rng).first;
             offer(n, Op::Crystal, cut);
@@ -589,8 +663,8 @@ class Run {
                 std::mt19937_64 rng = rngFor(task, step++);
                 const bool symmetric = n >= 4 && unit(rng) < 0.5;
                 const Op op = symmetric ? Op::Symmetric : Op::Dense;
-                if (!worth(op, rng)) continue;
-                const Timed timed(*this, op);
+                if (!worth(op, n, rng)) continue;
+                const Timed timed(*this, op, n);
                 const double roomy = 1.3 * bestSide(n);
                 Layout l = symmetric ? symmetricStart(n, roomy, rng) : denseStart(n, roomy, rng);
 
@@ -609,17 +683,30 @@ class Run {
             }
         }
 
-        if (std::mt19937_64 rng = rngFor(task, step++); !stop_.load() && worth(Op::Refine, rng)) {
-            const Timed timed(*this, Op::Refine);
-            Layout l = bestCopy(n);
-            anneal(l, cfg_.refineItersPerTree, cfg_.refineTemp, cfg_.refineStep, rng);
-            offer(n, Op::Refine, std::move(l));
+        // Refine: a walk of re-anneals, hotter at each step of the ladder. The anneal can drop
+        // a tree into a hole, which a squeeze can't; the squeeze then takes up the room.
+        Layout walk = bestCopy(n);
+        for (int k = 0; k < cfg_.refineTries && !stop_.load(); ++k) {
+            std::mt19937_64 rng = rngFor(task, step++);
+            if (!worth(Op::Refine, n, rng)) continue;
+            const Timed timed(*this, Op::Refine, n);
+            const double temp = cfg_.refineTemps[static_cast<std::size_t>(k) % cfg_.refineTemps.size()];
+            Layout l = walk;
+            anneal(l, cfg_.refineItersPerTree, temp, cfg_.refineStep, rng);
+            const bool worked = offer(n, Op::Refine, l);
+            std::optional<Layout> r = squeezeInto(l, squeezeTarget(n), rng);
+            if (offerIf(n, Op::Refine, r) || worked) {
+                walk = bestCopy(n);
+            } else if (l.isValid() && l.side() <= bestSide(n) * (1 + cfg_.eliteSlack)) {
+                addElite(n, l);
+                walk = std::move(l); // as good as the best, near enough: walk on from it
+            }
         }
 
         const bool randomTurn = n <= cfg_.smallMax && task.visit % 2 == 1;
         if (std::mt19937_64 rng = rngFor(task, step++);
-            randomTurn && !stop_.load() && worth(Op::Random, rng)) {
-            const Timed timed(*this, Op::Random);
+            randomTurn && !stop_.load() && worth(Op::Random, n, rng)) {
+            const Timed timed(*this, Op::Random, n);
             Layout l = randomStart(n, rng);
             anneal(l, cfg_.randomItersPerTree, cfg_.randomTemp, cfg_.randomStep, rng);
             offer(n, Op::Random, std::move(l));
@@ -642,7 +729,7 @@ class Run {
     // One neighbour try.
     void single(const Task &task) {
         const int n = task.n;
-        const Timed timed(*this, task.op);
+        const Timed timed(*this, task.op, n);
         std::mt19937_64 rng = rngFor(task, 1000 + static_cast<int>(task.op));
 
         if (task.op == Op::Remove) {
@@ -696,8 +783,9 @@ class Run {
         origins_[n] = opName(op);
         const double gain = (before * before - after * after) / n;
         gain_[n] += gain;
-        ++stats_[static_cast<std::size_t>(op)].wins;
-        stats_[static_cast<std::size_t>(op)].gain += gain;
+        OpStats &st = stats_[bandOf(n)][static_cast<std::size_t>(op)];
+        ++st.wins;
+        st.gain += gain;
         addEliteLocked(n, best_[n]);
 
         std::printf("[%5.0fs] n=%-3d %.6f -> %.6f  (%s)  score %.6f\n", elapsed(), n,
@@ -705,8 +793,9 @@ class Run {
         std::fflush(stdout);
 
         // A smaller n can now come from this one minus a tree, and a bigger one from it plus a
-        // tree. The sweep is going down, so it reaches n-1 soon anyway: only n+1 needs a nudge.
-        if (n + 1 <= cfg_.maxN) urgent_.push_back({n + 1, Op::Add, 0});
+        // tree. The sweep is going down, so it reaches n-1 soon anyway: only n+1 needs a nudge,
+        // and only after a real gain (compress wins tiny amounts often).
+        if (n + 1 <= cfg_.maxN && gain > cfg_.urgentMinGain) urgent_.push_back({n + 1, Op::Add, 0});
 
         return true;
     }
